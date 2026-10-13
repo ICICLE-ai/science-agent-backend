@@ -1,0 +1,31 @@
+services:
+  backend:
+    image: python:3.12-slim
+    working_dir: /app
+    env_file:
+      - .env
+    environment:
+      PORT: "8000"
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in .env}
+      UV_PROJECT_ENVIRONMENT: /opt/venv
+      UV_LINK_MODE: copy
+      PYTHONUNBUFFERED: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+    volumes:
+      - ./src:/app/src:ro
+      - ./pyproject.toml:/app/pyproject.toml:ro
+      - ./uv.lock:/app/uv.lock:ro
+      - backend-venv:/opt/venv
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        python -m pip install --no-cache-dir --index-url https://pypi.org/simple uv==0.9.29
+        uv sync --frozen --no-dev --no-editable
+        exec /opt/venv/bin/uvicorn science_agent_backend.main:app --host 0.0.0.0 --port 8000
+    ports:
+      - "${BACKEND_BIND_ADDRESS:-127.0.0.1}:${BACKEND_PORT:-8000}:8000"
+    restart: unless-stopped
+
+volumes:
+  backend-venv:

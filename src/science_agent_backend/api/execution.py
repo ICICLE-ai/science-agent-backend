@@ -32,7 +32,7 @@ async def websocket(ws: WebSocket, sid: UUID):
         async with send_lock:
             await ws.send_json(data)
 
-    await send(dict(type='state', state=state, has_default_llm=bool(config.POD_TOKEN), agent_backend='pod'))
+    await send(dict(type='state', state=state, has_default_llm=bool(config.POD_URL), agent_backend='pod'))
 
     async def execute(data):
         cid = data['command_id']

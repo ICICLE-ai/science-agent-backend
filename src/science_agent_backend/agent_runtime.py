@@ -29,8 +29,8 @@ async def transfer_attachments(channel, prefix, sid, subject, uploaded_files, pr
 
 
 async def run(sid, identity, message, send):
-    if not config.POD_TOKEN:
-        raise RuntimeError('Agent service credential is not configured.')
+    if not config.POD_URL:
+        raise RuntimeError('Agent service URL is not configured.')
     run_id = str(uuid4())
 
     async def progress(detail):

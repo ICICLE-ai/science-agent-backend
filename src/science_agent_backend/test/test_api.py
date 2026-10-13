@@ -38,6 +38,25 @@ def test_health_routes(client):
     assert client.get('/healthcheck').json()['agent_backend'] == 'pod'
 
 
+def test_websocket_agent_available_without_gateway_token(client, monkeypatch):
+    monkeypatch.setattr(main.config, 'POD_TOKEN', '')
+    monkeypatch.setattr(main.config, 'POD_URL', 'https://agent.example.org')
+    monkeypatch.setattr(main.database, 'get', AsyncMock(return_value={}))
+    client.cookies.set('X-Tapis-Token', 'test-only')
+    with client.websocket_connect(f'/api/execution/ws/{uuid4()}') as ws:
+        assert ws.receive_json()['has_default_llm'] is True
+
+
+def test_websocket_requires_user_cookie_without_gateway_token(client, monkeypatch):
+    from starlette.websockets import WebSocketDisconnect
+
+    monkeypatch.setattr(main.config, 'POD_TOKEN', '')
+    with pytest.raises(WebSocketDisconnect) as exc:
+        with client.websocket_connect(f'/api/execution/ws/{uuid4()}'):
+            pass
+    assert exc.value.code == 4401
+
+
 def test_active_request_blocks_files_and_session_delete(client, monkeypatch):
     sid = uuid4()
     monkeypatch.setattr(main.database, 'get', AsyncMock(return_value={}))

@@ -1,4 +1,4 @@
-"""Authenticated ttyd transport for the web agent and a standalone smoke probe."""
+"""ttyd transport with optional Tapis gateway authentication."""
 import asyncio
 import json
 import re
@@ -10,12 +10,12 @@ import pyte
 
 
 class PodTerminal:
-    def __init__(self, url, token):
+    def __init__(self, url, token=''):
         parsed = urlsplit(url)
         if parsed.scheme != 'https' or parsed.username or parsed.password or parsed.query or parsed.fragment:
             raise ValueError('Use an HTTPS pod URL without credentials or query parameters.')
         self.url = url.rstrip('/')
-        self.token = token
+        self.token = token or ''
 
     async def request(self, prompt, timeout=180, progress=None):
         """Submit one request; completion requires a framed reply and an idle prompt."""
@@ -34,7 +34,7 @@ class PodTerminal:
         submitted = False
         completed = False
         async with aiohttp.ClientSession(
-            headers={'X-Tapis-Token': self.token},
+            headers={'X-Tapis-Token': self.token} if self.token else {},
             timeout=aiohttp.ClientTimeout(total=20),
         ) as client:
             async with client.get(self.url + '/token', allow_redirects=False) as response:
@@ -69,7 +69,7 @@ class PodTerminal:
                         answer = self._answer(screen, begin, end)
                         if answer is not None and not changed and self._idle(screen):
                             completed = True
-                            return answer.replace(self.token, '[REDACTED]')
+                            return answer.replace(self.token, '[REDACTED]') if self.token else answer
                     raise RuntimeError('Remote agent: response timed out. Check the remote terminal before retrying; a remote operation may still be running.')
                 finally:
                     if submitted and not completed and not ws.closed:

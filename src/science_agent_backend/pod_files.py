@@ -1,4 +1,4 @@
-"""Transfer files through authenticated ttyd, without an API server or LLM."""
+"""Transfer files through ttyd with optional Tapis gateway authentication."""
 import asyncio
 import base64
 from contextlib import asynccontextmanager
@@ -69,7 +69,7 @@ class PodFiles:
 
 
 @asynccontextmanager
-async def file_channel(url, token):
+async def file_channel(url, token=''):
     from .pod_terminal import PodTerminal
     PodTerminal(url, token)  # Validate the configured origin before sending credentials.
     origin = urlsplit(url)
@@ -80,7 +80,7 @@ async def file_channel(url, token):
                  + '));serve(' + repr(marker) + ')')
     shell = 'python3 -u -c ' + shlex.quote(bootstrap)
     command = 'new-window -n ' + marker + ' ' + shlex.quote(shell)
-    async with aiohttp.ClientSession(headers={'X-Tapis-Token': token},
+    async with aiohttp.ClientSession(headers={'X-Tapis-Token': token} if token else {},
                                      timeout=aiohttp.ClientTimeout(total=30)) as client:
         async with client.get(url.rstrip('/')+'/token', allow_redirects=False) as response:
             if response.status != 200:
