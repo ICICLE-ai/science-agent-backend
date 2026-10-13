@@ -1,0 +1,16 @@
+schema-version: 1
+
+# Identity
+service-name: science-agent-backend
+service-version: 0.1.0
+project-name: icicle-science-agent
+service-type: ai
+pod-name: scienceagentbackend
+
+# Runtime
+runtime-type: python
+runtime-version: "3.12"
+
+# System packages (leave empty lists if you don't need any)
+build-apt-packages: []
+runtime-apt-packages: []
