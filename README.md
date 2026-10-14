@@ -1,114 +1,111 @@
-# Science Agent Backend (FastAPI)
+# Science Agent Backend
 
-Initial migration: cookie authentication, PostgreSQL conversations and attachments,
-WebSocket conversation restore/commands/progress, and the remote agent pod.
+Science Agent helps researchers carry out tasks using ICICLE services and resources through natural language. This backend connects the browser interface to the remote Science Agent, preserving user conversations and files and supplying the context needed for workflows such as ArrayMorph storage and Smart Labeler job submission.
 
-## Run
+**Tags:** Software, CI4AI
 
-Configure `.env` using `.env.example`, then:
+### License
 
-```bash
+A project license has not yet been specified in this repository. License approval is required before the software release.
+
+## References
+
+- [Science Agent Frontend](https://github.com/ICICLE-ai/science-agent-frontend)
+- [ICICLE](https://icicle.osu.edu/)
+- [Smart Labeler](https://github.com/ICICLE-ai/smart_labeler)
+- [ArrayMorph](https://github.com/ICICLE-ai/ArrayMorph)
+
+## Acknowledgements
+
+*National Science Foundation (NSF) funded AI institute for Intelligent Cyberinfrastructure with Computational Learning in the Environment (ICICLE) (OAC 2112606)*
+
+---
+
+# Tutorials
+
+## Use Science Agent for an image workflow
+
+Use the [frontend](https://github.com/ICICLE-ai/science-agent-frontend) to interact with the service; the backend is not a separate chat interface. This walkthrough requires an authenticated ICICLE user, a reachable agent pod, a selected S3 credential profile, and access to the configured Tapis and Smart Labeler resources.
+
+1. Open Science Agent through the ICICLE hub and create a conversation.
+2. In Settings, save or import an S3 credential profile and select it. Profiles belong to the authenticated user; saving a profile alone does not select it.
+3. Upload one image and enter:
+
+   > Upload this image with ArrayMorph and use Smart Labeler to label it.
+
+4. Start the request. The backend retrieves that user's conversation, uploaded file, and selected credentials, then transfers the files and service instructions to the agent.
+5. Follow the available progress messages. The agent performs the service work: ArrayMorph storage and recovery, Tapis staging, creation of a Smart Labeler pipeline, and job submission.
+6. Review the recorded stages and returned pipeline/job identifiers. If a step fails, use the report to identify where the workflow stopped before retrying a state-changing request.
+7. Ask a follow-up using the returned job ID:
+
+   > Check the status of job JOB_ID without creating a new pipeline or submitting another job.
+
+A submission response confirms only what was observed at submission time. Finished labels or classifications require a completed external job and verified outputs.
+
+## Store data without labeling
+
+Upload a file, select an S3 profile, and ask:
+
+> Store this uploaded file with ArrayMorph in my selected S3 bucket. Do not submit a Smart Labeler job.
+
+The agent uses the selected credentials rather than a shared default bucket. Review the returned storage location and recovery verification. Reopen the same conversation later to review the report or continue with another request.
+
+---
+
+# How-To Guides
+
+## Configure and start
+
+Set the backend's private `.env`:
+
+```env
+DATABASE_URL=postgresql://USER:PASSWORD@DB_HOST:5432/DB_NAME
+SCIENCE_AGENT_POD_URL=https://YOUR_AGENT_POD_HOST
+TAPIS_BASE_URL=https://icicleai.tapis.io
+TAPIS_ALLOWED_TENANTS=icicleai
+SMART_LABELER_BASE_URL=https://smartlabelerbackend.pods.icicleai.tapis.io
+FRONTEND_ORIGINS=https://scienceagent.pods.icicleai.tapis.io
+```
+
+Replace the database URL and service addresses with the provisioned deployment values. The DB must be reachable from the container, and its account needs table creation, alteration, and read/write permissions. For local development, set `FRONTEND_ORIGINS` to the actual local frontend origin.
+
+`SCIENCE_AGENT_POD_TOKEN` is optional and is needed only if the agent pod gateway requires separate authentication. It does not replace the user's Tapis cookie token. S3 credentials are selected per user, not configured as global backend environment values.
+
+Start using Docker Compose:
+
+```sh
+docker compose up -d
+```
+
+Compose downloads Python, installs the locked dependencies and source package, and starts the backend on port 8000. PostgreSQL and the agent pod are external services. Tables and migration history are initialized automatically at startup; no manual table setup is needed.
+
+For local development instead:
+
+```sh
 uv sync
 uv run uvicorn science_agent_backend.main:app --host 127.0.0.1 --port 8000
 ```
 
-Use one worker in this initial version. The frontend's existing `/api` proxy
-targets port 8000. API documentation is at `/docs`.
-`/health` is the CI/CD health endpoint. `/healthcheck` remains available for
-existing clients. Both report application availability, not remote pod readiness.
+Use one worker in this version. API documentation is available at `/docs`; `/health` reports application availability, not remote service readiness.
 
-## Source Layout
+---
 
-```text
-src/science_agent_backend/
-    __init__.py
-    main.py                  # FastAPI app, lifespan, middleware, router wiring
-    api/
-        __init__.py
-        health.py            # /health and /healthcheck
-        account.py           # Tapis account and S3 credential settings
-        sessions.py          # Conversation creation, listing, validation, deletion
-        files.py             # PostgreSQL attachment upload/download/deletion
-        execution.py         # Agent WebSocket commands and progress
-        tasks.py             # Conversation detail and gallery compatibility
-        storage.py           # Existing S3 browser endpoint (currently 501)
-        dependencies.py      # Shared authenticated-user dependency
-    auth.py
-    config.py
-    database.py
-    agent_runtime.py
-    runtime_state.py         # Shared active-request state
-    pod_files.py
-    pod_receiver.py
-    pod_terminal.py
-    s3_credentials.py
-    migrations/
-        __init__.py          # Migration runner and history checks
-        __main__.py          # Optional migration CLI
-        0001_initial_schema.sql
-    skills/                  # Instructions and scripts sent to the remote pod
-```
+# Explanation
 
-The installed package includes the migration SQL and skill resources. `uv build`
-creates the deployment wheel. Production configuration comes from environment
-variables; local development also loads the project-root `.env`.
+## User context, not a new agent per account
 
-## Database Migrations
+The backend verifies the `X-Tapis-Token` cookie and uses the validated identity to scope conversation, attachment, and S3 profile access. It sends the user's token in private request-specific context so the agent can call Smart Labeler and Tapis on that user's behalf.
 
-Set `DATABASE_URL` when the deployment's PostgreSQL connection details become
-available. The backend applies migrations during startup before accepting API
-requests. The connection user needs permission to create and alter the service's
-tables in the configured schema.
+The remote agent is shared. Each request receives its own files, recent conversation messages, selected S3 credentials, and workflow observations. This is application-level context separation, not a dedicated pod or an operating-system security boundary for every user.
 
-On first connection, if `science_agent_migration_history` does not exist, the
-backend creates it, applies `0001_initial_schema.sql`, and records version **1**.
-Each history row contains `version`, `name`, `checksum`, and `applied_at`.
-Existing development tables without migration history are adopted by this
-initial migration; their data is preserved.
+## Responsibility boundaries
 
-On later startups, recorded versions are checked and only pending migrations
-are applied. Schema changes and their history rows commit together; failure
-rolls back that initialization attempt. A PostgreSQL advisory lock ensures that
-concurrent backend instances initialize the DB only once.
+The frontend handles interaction, the backend handles authentication and persistence, and the agent pod performs service operations. PostgreSQL stores conversations, uploaded file bytes, S3 profiles, and recorded workflow observations. ArrayMorph and Smart Labeler work runs on the agent side rather than inside the backend container.
 
-For a future schema change, add `0002_description.sql`, then `0003_description.sql`,
-and so on under `src/science_agent_backend/migrations/`. Keep applied SQL files
-unchanged; their SHA-256 checksums are verified. The runner owns the transaction,
-so migration files must not contain BEGIN, COMMIT, or ROLLBACK commands.
+Migration history is maintained automatically by the backend. Uploaded files and credentials must be protected through restricted DB access, secure backups, and HTTPS. S3 secrets are currently stored without application-level encryption; they are not returned in public profile responses.
 
-Optional manual application and history display:
+## Current scope
 
-```bash
-uv run python -m science_agent_backend.migrations
-```
+The integrated labeling flow accepts exactly one image. It reports observed submission and status information rather than treating submission as completed labeling.
 
-Migration checks use isolated temporary schemas in the configured test database:
-
-```bash
-SCIENCE_AGENT_TEST_DATABASE=1 uv run pytest -q src/science_agent_backend/test/test_migrations.py
-```
-
-The local `.env` was initialized privately from existing development DB and pod
-settings. No runtime imports from the old backend are required. Existing database
-tables and conversations are retained. Existing S3 credentials are migrated to
-named entries and retain their previous selection.
-
-## Isolated checks
-
-```bash
-uv run pytest -q
-```
-
-These checks mock authentication, persistence, and transport; they are not proof
-of real Tapis/pod connectivity. Real integration results are reported separately.
-
-To explicitly run the attachment lifecycle checks against the configured
-PostgreSQL database (temporary test records are removed afterward):
-
-```bash
-SCIENCE_AGENT_TEST_DATABASE=1 uv run pytest -q src/science_agent_backend/test/test_attachments.py
-```
-
-The multiple-credential lifecycle and owner isolation checks can also be run
-against the configured DB with `SCIENCE_AGENT_TEST_DATABASE=1 uv run pytest -q
-src/science_agent_backend/test/test_s3_credentials.py`. They create temporary test accounts and clean them up.
+The shared-agent guard currently serializes requests within one backend instance; multi-instance coordination is not implemented. The S3 browser API and original coding-agent execution commands have not been migrated. Hub cookie delivery, service permissions, and external job readiness remain deployment prerequisites.
