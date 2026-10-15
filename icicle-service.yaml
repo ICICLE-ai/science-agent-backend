@@ -1,11 +1,10 @@
-schema-version: 2
+schema-version: 3
 
 # Identity
-service-name: science-agent-backend
+service-name: scienceagentapi
 service-version: 0.1.0
 project-name: icicle-science-agent
 service-type: ai
-pod-name: scienceagentbackend
 
 # Runtime
 runtime-type: python
