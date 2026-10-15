@@ -2,7 +2,7 @@ schema-version: 3
 
 # Identity
 service-name: scienceagentapi
-service-version: 1.0.0
+service-version: 1.0.1
 project-name: icicle-science-agent
 service-type: ai
 
