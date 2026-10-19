@@ -1,0 +1,33 @@
+# ICICLE catalog metadata for the backend repository (not deployment settings).
+# Pending release-team confirmation: release status and remaining platform dependencies.
+- id: "ScienceAgentBackend:1.0.1"
+  owner: "Hansol Lee"
+  primaryThrust: "core/CI4AI"
+  name: "Science Agent Backend"
+  status: "PrototypeRelease"
+  description: >-
+    Science Agent helps researchers use ICICLE services through natural-language
+    requests. This backend authenticates Tapis users, preserves their conversations
+    and uploaded files, and supplies a remote agent with user-specific context for
+    ArrayMorph storage and Smart Labeler workflows.
+  componentVersion: "0.1.0"
+  # Release date supplied by the maintainer: 2026-10-15. Catalog stores YYYY-MM.
+  targetIcicleRelease: "2026-10"
+  # Maintainer confirmed the currently registered ArrayMorph and Smart Labeler versions.
+  # Catalog references: CI-Components-Catalog/release_catalog.yml and
+  # ICICLE-ai/smart_labeler/component.yaml. Preserve their exact ID spelling.
+  hasDependentComponents:
+    - related_to: "arraymorph:1.2"
+      relationship_type: "DependsOn"
+    - related_to: "SmartDetector:0.2.0"
+      relationship_type: "DependsOn"
+  # and use their actual catalog IDs rather than inferring deployed versions.
+  licenseUrl: "https://github.com/ICICLE-ai/science-agent-backend?tab=MIT-1-ov-file"
+  publicAccess: true
+  sourceCodeUrl: "https://github.com/ICICLE-ai/science-agent-backend"
+  # No completed formal review has been confirmed.
+  codeReviewConducted: false
+  # Automated tests exist; this flag does not claim live integration passed.
+  testsWritten: true
+  developerDocumentationAvailable: true
+  trainingTutorialsAvailable: true

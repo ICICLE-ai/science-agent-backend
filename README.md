@@ -6,9 +6,14 @@ Science Agent helps researchers carry out tasks using ICICLE services and resour
 
 ### License
 
-A project license has not yet been specified in this repository. License approval is required before the software release.
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
+This project continues the MIT license of the original
+[ScienceAgentInterface](https://github.com/ICICLE-ai/ScienceAgentInterface), retaining its copyright notice.
 
 ## References
+
+- [OpenAPI JSON](openapi.json)
 
 - [Science Agent Frontend](https://github.com/ICICLE-ai/science-agent-frontend)
 - [ICICLE](https://icicle.osu.edu/)
@@ -91,6 +96,12 @@ Use one worker in this version. API documentation is available at `/docs`; `/hea
 ---
 
 # Explanation
+
+The HTTP API specification is served at /openapi.json and saved in openapi.json
+for release submission. Regenerate the file with
+`uv run python -m science_agent_backend.openapi --output openapi.json` after API
+changes. This exports documentation without connecting to PostgreSQL or the pod.
+WebSocket behavior is documented separately in the x-websockets extension.
 
 ## User context, not a new agent per account
 
