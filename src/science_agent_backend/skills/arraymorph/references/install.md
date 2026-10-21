@@ -52,6 +52,10 @@ probe is separate from the chat workflow, not an automatic upload feature.
 
 ## Configure ICICLE S3 in the storage subprocess
 
+The standard ArrayMorph reads S3 settings from ~/.arraymorph/config,
+but this deployment avoids that file for security reasons and
+uses per-user credentials stored encrypted in PostgreSQL.
+
 Use the selected user credential delivered in the private request context from
 PostgreSQL. If no credential is selected, ask the user to select one in Settings.
 Do not read global AWS environment values, ~/.aws files, or a local service key
@@ -76,8 +80,9 @@ import h5py
 import numpy as np
 ```
 
-The Python API configures environment variables. Do not assume legacy
-~/.arraymorph/config instructions apply to the installed version.
+The Python API above configures environment variables. Do not follow the
+~/.arraymorph/config instructions in the standard ArrayMorph README
+for this deployement.
 
 ## Verification before uploaded-image processing
 

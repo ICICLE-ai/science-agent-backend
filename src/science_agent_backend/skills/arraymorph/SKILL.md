@@ -26,7 +26,9 @@ agent's own Python environment. Installing instructions is not installing the
 package. Do not install packages unless the user requests setup.
 
 For an image, distinguish lossless storage of original encoded bytes in a uint8
-dataset from conversion to a pixel array. Preserve original bytes when a later
+dataset from conversion to a pixel array. ArrayMorph stores the uint8 bytes
+as an HDF5 dataset in S3, so the uploaded JPEG/PNG does not appear in the
+bucket as a standalone .jpg/.png file. Preserve original bytes when a later
 Smart Labeler operation needs the original JPEG/PNG. Reconstruct and verify the
 SHA256 before staging that file to Smart Labeler; an HDF5 filename is not an
 image path for the labeling API.
