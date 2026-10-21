@@ -50,7 +50,7 @@ async def run(sid, identity, message, send):
             from .s3_credentials import load_profile
             s3 = await load_profile(identity.subject, include_secrets=True)
             await progress('Connecting and transferring service instructions')
-            async with file_channel(config.POD_URL, config.POD_TOKEN) as channel:
+            async with file_channel(config.POD_URL, identity.token) as channel:
                 root = channel.info['root']
                 for path in config.SKILLS_DIR.rglob('*'):
                     if path.is_file() and '__pycache__' not in path.parts:
@@ -90,8 +90,8 @@ async def run(sid, identity, message, send):
                 'Report completed stages, pipeline/job identifiers, and exact job status. Submitted is not completed. '
                 'Do not claim classification or segmentation results until the job has finished and outputs are verified. '
                 f'Uploaded files: {json.dumps(files)}')
-            answer = await PodTerminal(config.POD_URL, config.POD_TOKEN).request(prompt, config.POD_TIMEOUT, progress)
-            for secret in (identity.token, config.POD_TOKEN, (s3 or {}).get('access_key_id',''), (s3 or {}).get('secret_access_key','')):
+            answer = await PodTerminal(config.POD_URL, identity.token).request(prompt, config.POD_TIMEOUT, progress)
+            for secret in (identity.token, (s3 or {}).get('access_key_id',''), (s3 or {}).get('secret_access_key','')):
                 if not secret:
                     continue
                 answer = answer.replace(secret, '[REDACTED]')
@@ -110,7 +110,7 @@ async def run(sid, identity, message, send):
         finally:
             if written:
                 try:
-                    async with file_channel(config.POD_URL, config.POD_TOKEN) as channel:
+                    async with file_channel(config.POD_URL, identity.token) as channel:
                         await channel.command({'op': 'remove', 'path': private})
                         observations = await channel.command({'op': 'observations', 'path': prefix + '/observations'})
                     await database.mutate(sid, identity.subject, lambda d: d['execution_log'].append(

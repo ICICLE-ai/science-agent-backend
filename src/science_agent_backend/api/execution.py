@@ -54,9 +54,8 @@ async def websocket(ws: WebSocket, sid: UUID):
             raise
         except Exception as exc:
             message = str(exc) if isinstance(exc, (RuntimeError, ValueError)) else 'Request failed. Check backend service logs.'
-            for secret in (user.token, config.POD_TOKEN):
-                if secret:
-                    message = message.replace(secret, '[REDACTED]')
+            if user.token:
+                message = message.replace(user.token, '[REDACTED]')
             await send(dict(type='error', command_id=cid, message=message))
         finally:
             active_sessions.discard(sid)

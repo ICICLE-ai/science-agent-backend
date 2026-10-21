@@ -6,7 +6,6 @@ PACKAGE_DIR = Path(__file__).resolve().parent
 ROOT = PACKAGE_DIR.parent.parent if PACKAGE_DIR.parent.name == 'src' else Path.cwd()
 load_dotenv(ROOT / '.env')
 DATABASE_URL = os.getenv('DATABASE_URL', '')
-POD_TOKEN = os.getenv('SCIENCE_AGENT_POD_TOKEN', '')
 POD_URL = os.getenv('SCIENCE_AGENT_POD_URL', '')
 POD_TIMEOUT = int(os.getenv('SCIENCE_AGENT_POD_TIMEOUT', '900'))
 UPLOAD_LIMIT = int(os.getenv('UPLOAD_LIMIT', str(64 * 1024 * 1024)))
