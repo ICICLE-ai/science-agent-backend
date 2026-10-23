@@ -10,6 +10,26 @@ import termios
 import tty
 import subprocess
 import signal
+import re
+
+
+def terminal_answer(begin, end):
+    if (not re.fullmatch(r'SA_BEGIN_[a-f0-9]{24}', begin)
+            or end != 'SA_END_' + begin[len('SA_BEGIN_'):]):
+        raise ValueError('Invalid answer markers')
+    result = subprocess.run(['tmux', 'capture-pane', '-p', '-J', '-S', '-10000', '-t', ':0.0'],
+                            capture_output=True, text=True, timeout=5, check=True)
+    lines = result.stdout.splitlines()
+    start, answer = None, None
+    for index, line in enumerate(lines):
+        if line.strip() == begin:
+            start = index + 1
+        elif start is not None and line.strip() == end:
+            answer = '\n'.join(lines[start:index]).strip()
+            start = None
+    if answer is not None and len(answer) > 1024 * 1024:
+        raise ValueError('Agent answer exceeds transfer limit')
+    return answer
 
 
 def serve(marker):
@@ -21,6 +41,7 @@ def serve(marker):
     pending = None
     handle = None
     request_id = 0
+    captured_answer, captured_markers = None, None
     signal.signal(signal.SIGHUP, lambda *_: sys.exit(0))
     def reply(data):
         data['request_id'] = request_id
@@ -80,6 +101,18 @@ def serve(marker):
                 elif op == 'remove':
                     target(request['path']).unlink(missing_ok=True)
                     reply({'removed': True})
+                elif op == 'terminal-answer':
+                    if request.get('offset', 0) == 0:
+                        captured_answer = terminal_answer(request['begin'], request['end'])
+                        captured_markers = (request['begin'], request['end'])
+                    elif (request['begin'], request['end']) != captured_markers:
+                        raise ValueError('Answer markers changed during transfer')
+                    offset = request.get('offset', 0)
+                    if not isinstance(offset, int) or offset < 0:
+                        raise ValueError('Invalid answer offset')
+                    reply({'found': captured_answer is not None,
+                           'text': (captured_answer or '')[offset:offset + 16384],
+                           'total': len(captured_answer or '')})
                 elif op == 'check':
                     tool = target(request['tool'])
                     context = target(request['context'])

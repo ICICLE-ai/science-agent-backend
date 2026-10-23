@@ -3,6 +3,7 @@ import asyncio
 import json
 import re
 import secrets
+from time import monotonic
 from urllib.parse import urlsplit
 
 import aiohttp
@@ -33,6 +34,7 @@ class PodTerminal:
         stream = pyte.ByteStream(screen)
         submitted = False
         completed = False
+        reply_finished = False
         async with aiohttp.ClientSession(
             headers={'X-Tapis-Token': self.token} if self.token else {},
             timeout=aiohttp.ClientTimeout(total=20),
@@ -64,15 +66,31 @@ class PodTerminal:
                     if progress:
                         await progress('Request sent to the remote agent; waiting for its response')
                     deadline = asyncio.get_running_loop().time() + timeout
+                    candidate, candidate_since = None, 0
+                    recovered = None
                     while asyncio.get_running_loop().time() < deadline:
-                        changed = await self._frame(ws, stream, 1)
-                        answer = self._answer(screen, begin, end)
-                        if answer is not None and not changed and self._idle(screen):
+                        await self._frame(ws, stream, 1)
+                        idle = self._idle(screen)
+                        if idle and self._has_end(screen, end):
+                            reply_finished = True
+                        answer = self._answer(screen, begin, end) or recovered
+                        if idle and answer is None and self._has_end(screen, end):
+                            recovered = await self._recover_answer(begin, end)
+                            if recovered is None:
+                                raise RuntimeError('Remote agent: the answer finished, but its full text could not be recovered. Check the agent terminal before retrying; do not repeat submitted jobs.')
+                            answer = recovered
+                        if not idle or answer is None:
+                            candidate, candidate_since = None, 0
+                            continue
+                        if answer != candidate:
+                            candidate, candidate_since = answer, monotonic()
+                        # Status-bar redraws do not mean the answer is still running.
+                        elif monotonic() - candidate_since >= 1:
                             completed = True
                             return answer.replace(self.token, '[REDACTED]') if self.token else answer
                     raise RuntimeError('Remote agent: response timed out. Check the remote terminal before retrying; a remote operation may still be running.')
                 finally:
-                    if submitted and not completed and not ws.closed:
+                    if submitted and not completed and not reply_finished and not ws.closed:
                         # Disconnect alone leaves the persistent tmux agent running.
                         try:
                             await ws.send_bytes(b'0\x03')
@@ -100,18 +118,48 @@ class PodTerminal:
                 and not any('msg=interrupt' in line for line in lines))
 
     @staticmethod
-    def _answer(screen, begin, end):
+    def _lines(screen):
         history = [''.join(line[x].data if x in line else ' ' for x in range(screen.columns))
                    for line in screen.history.top]
-        lines = [line.rstrip() for line in history + screen.display]
+        return [line.rstrip() for line in history + screen.display]
+
+    @classmethod
+    def _has_end(cls, screen, end):
+        return any(line.strip() == end for line in cls._lines(screen))
+
+    async def _recover_answer(self, begin, end):
+        # Full-screen redraws can discard the start of long replies from pyte.
+        # Read only this request's framed answer from the agent's tmux pane.
+        from .pod_files import file_channel
+        chunks, offset = [], 0
+        async with file_channel(self.url, self.token) as channel:
+            while True:
+                result = await channel.command(dict(op='terminal-answer', begin=begin,
+                                                     end=end, offset=offset))
+                if not result.get('found'):
+                    return None
+                chunk = result['text']
+                chunks.append(chunk)
+                offset += len(chunk)
+                if offset >= result['total']:
+                    return '\n'.join(self._clean_lines(''.join(chunks).splitlines())).strip() or None
+                if not chunk:
+                    raise RuntimeError('Remote agent: answer transfer stopped before completion.')
+
+    @staticmethod
+    def _clean_lines(lines):
+        return [re.sub(r'(?:~?\d+(?:\.\d+)?K|K)/\d+K\s+pinned.*$', '', value).rstrip()
+                for value in lines]
+
+    @classmethod
+    def _answer(cls, screen, begin, end):
+        lines = cls._lines(screen)
         start = None
         for index, line in enumerate(lines):
             if line.strip() == begin:
                 start = index + 1
-            elif start is not None and (line.strip() == end or line.lstrip().startswith('╰─')):
-                answer_lines = [re.sub(
-                    r'(?:~?\d+(?:\.\d+)?K|K)/\d+K\s+pinned.*$', '', value
-                ).rstrip() for value in lines[start:index]]
+            elif start is not None and line.strip() == end:
+                answer_lines = cls._clean_lines(lines[start:index])
                 answer = '\n'.join(answer_lines).strip()
                 if answer:
                     return answer
