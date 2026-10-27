@@ -11,6 +11,71 @@ import tty
 import subprocess
 import signal
 import re
+import time
+
+
+def metrics_prompt_choice(text):
+    lines = text.splitlines()
+    if not any(line.strip() == 'Help improve Hermes?' for line in lines):
+        return None
+    choices, selected = set(), []
+    for line in lines:
+        match = re.fullmatch(r'\s*(?:[\u2192\u276f>]\s*)?\(([\u25cb\u25cf\u25c9\u25ef ])\)\s*(Share with Nous|No thanks)\s*', line)
+        if match:
+            choices.add(match[2])
+            if match[1] in {'\u25cf', '\u25c9'}:
+                selected.append(match[2])
+    if choices != {'Share with Nous', 'No thanks'} or len(selected) != 1:
+        return None
+    return 'decline' if selected[0] == 'No thanks' else 'share'
+
+
+def decline_metrics():
+    pane = ':0.0'
+    result = subprocess.run(['tmux', 'display-message', '-p', '-t', pane, '#{pane_in_mode}'],
+                            capture_output=True, text=True, timeout=5, check=True)
+    if result.stdout.strip() != '0':
+        return {'declined': False, 'reason': 'terminal_in_copy_mode'}
+
+    def choice():
+        result = subprocess.run(['tmux', 'capture-pane', '-p', '-t', pane],
+                                capture_output=True, text=True, timeout=5, check=True)
+        return metrics_prompt_choice(result.stdout)
+
+    selected = choice()
+    if selected is None:
+        return {'declined': False, 'reason': 'not_metrics_prompt'}
+    if selected == 'share':
+        subprocess.run(['tmux', 'send-keys', '-t', pane, 'Down'], timeout=5, check=True)
+        for _ in range(10):
+            time.sleep(0.1)
+            if choice() == 'decline':
+                break
+        else:
+            return {'declined': False, 'reason': 'decline_option_not_selected'}
+    # Never confirm until the visible selection has been verified as No thanks.
+    subprocess.run(['tmux', 'send-keys', '-t', pane, 'Enter'], timeout=5, check=True)
+    return {'declined': True}
+
+
+def start_agent():
+    pane = ':0.0'
+    result = subprocess.run(['tmux', 'display-message', '-p', '-t', pane,
+                             '#{pane_current_command}\t#{pane_in_mode}\t#{cursor_x}\t#{cursor_y}'],
+                            capture_output=True, text=True, timeout=5, check=True)
+    command, mode, x, y = result.stdout.rstrip('\n').split('\t')
+    if Path(command).name.lstrip('-') not in {'sh', 'bash', 'zsh', 'dash', 'ash', 'fish', 'ksh'} or mode != '0':
+        return {'started': False, 'reason': 'not_idle_shell'}
+    result = subprocess.run(['tmux', 'capture-pane', '-p', '-t', pane, '-S', y, '-E', y],
+                            capture_output=True, text=True, timeout=5, check=True)
+    line = result.stdout.rstrip('\n')
+    if (not re.fullmatch(r'[\w./~:@ ()-]*[#$%]\s*', line[:int(x)])
+            or line[int(x):].strip()):
+        return {'started': False, 'reason': 'not_empty_shell_prompt'}
+    # Send a fixed command only to the verified shell, never resume old history.
+    subprocess.run(['tmux', 'send-keys', '-t', pane, '-l', 'hermes'], timeout=5, check=True)
+    subprocess.run(['tmux', 'send-keys', '-t', pane, 'Enter'], timeout=5, check=True)
+    return {'started': True}
 
 
 def terminal_answer(begin, end):
@@ -101,6 +166,10 @@ def serve(marker):
                 elif op == 'remove':
                     target(request['path']).unlink(missing_ok=True)
                     reply({'removed': True})
+                elif op == 'start-agent':
+                    reply(start_agent())
+                elif op == 'decline-metrics':
+                    reply(decline_metrics())
                 elif op == 'terminal-answer':
                     if request.get('offset', 0) == 0:
                         captured_answer = terminal_answer(request['begin'], request['end'])

@@ -52,13 +52,7 @@ class PodTerminal:
                 await asyncio.sleep(1)
                 await ws.send_bytes(b'0\x020')
                 try:
-                    # Allow the initial tmux screen to finish replaying.
-                    ready_deadline = asyncio.get_running_loop().time() + 12
-                    while asyncio.get_running_loop().time() < ready_deadline:
-                        if await self._frame(ws, stream, 1) is False and self._idle(screen):
-                            break
-                    else:
-                        raise RuntimeError('Remote agent: terminal is busy or its input prompt is unavailable.')
+                    await self.health_check(ws, stream, screen, progress)
                     await ws.send_bytes(b'0\x1b[200~' + instruction.encode() + b'\x1b[201~')
                     await asyncio.sleep(0.5)
                     submitted = True
@@ -96,6 +90,51 @@ class PodTerminal:
                             await ws.send_bytes(b'0\x03')
                         except (aiohttp.ClientError, ConnectionError):
                             pass
+
+    @staticmethod
+    def _shell_prompt(screen):
+        line = screen.display[screen.cursor.y]
+        return (not line[screen.cursor.x:].strip()
+                and re.fullmatch(r'[\w./~:@ ()-]*[#$%]\s*', line[:screen.cursor.x]) is not None)
+
+    async def health_check(self, ws, stream, screen, progress=None):
+        """Repair known startup states; return only when the agent is ready."""
+        from .pod_receiver import metrics_prompt_choice
+        from .pod_files import file_channel
+
+        deadline = monotonic() + 12
+        actions = []
+        while monotonic() < deadline:
+            changed = await self._frame(ws, stream, 1)
+            if metrics_prompt_choice('\n'.join(screen.display)) is not None:
+                if 'declined_metrics' not in actions and not changed:
+                    async with file_channel(self.url, self.token) as channel:
+                        result = await channel.command({'op': 'decline-metrics'})
+                    if not result.get('declined'):
+                        raise RuntimeError('Remote agent: the information-sharing prompt could not be safely declined. No request was sent.')
+                    actions.append('declined_metrics')
+                    screen.reset()
+                    deadline = monotonic() + 60
+                    if progress:
+                        await progress('Declined optional usage metrics sharing; waiting for the agent input prompt')
+            elif self._shell_prompt(screen):
+                if 'started_agent' not in actions and not changed:
+                    async with file_channel(self.url, self.token) as channel:
+                        result = await channel.command({'op': 'start-agent'})
+                    if not result.get('started'):
+                        raise RuntimeError('Remote agent: the terminal is not an empty shell; automatic startup was skipped.')
+                    actions.append('started_agent')
+                    screen.reset()
+                    deadline = monotonic() + 60
+                    if progress:
+                        await progress('Agent is not running; starting a new agent session')
+            elif self._idle(screen) and not changed:
+                if actions and progress:
+                    await progress('Agent health check passed; ready to receive the request')
+                return {'status': 'ready', 'actions': actions}
+        if actions:
+            raise RuntimeError('Remote agent: startup recovery did not reach the agent input prompt within 60 seconds. No request was sent. Check the agent terminal.')
+        raise RuntimeError('Remote agent: terminal is busy or its input prompt is unavailable.')
 
     @staticmethod
     async def _frame(ws, stream, timeout):
