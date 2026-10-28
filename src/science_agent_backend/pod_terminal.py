@@ -9,6 +9,8 @@ from urllib.parse import urlsplit
 import aiohttp
 import pyte
 
+from .pod_receiver import framed_answer, is_reply_marker
+
 
 class PodTerminal:
     def __init__(self, url, token=''):
@@ -164,7 +166,7 @@ class PodTerminal:
 
     @classmethod
     def _has_end(cls, screen, end):
-        return any(line.strip() == end for line in cls._lines(screen))
+        return any(is_reply_marker(line, end) for line in cls._lines(screen))
 
     async def _recover_answer(self, begin, end):
         # Full-screen redraws can discard the start of long replies from pyte.
@@ -192,14 +194,5 @@ class PodTerminal:
 
     @classmethod
     def _answer(cls, screen, begin, end):
-        lines = cls._lines(screen)
-        start = None
-        for index, line in enumerate(lines):
-            if line.strip() == begin:
-                start = index + 1
-            elif start is not None and line.strip() == end:
-                answer_lines = cls._clean_lines(lines[start:index])
-                answer = '\n'.join(answer_lines).strip()
-                if answer:
-                    return answer
-        return None
+        answer = framed_answer(cls._lines(screen), begin, end)
+        return '\n'.join(cls._clean_lines(answer.splitlines())).strip() if answer else None

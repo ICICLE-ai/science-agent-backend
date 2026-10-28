@@ -14,6 +14,23 @@ import re
 import time
 
 
+def is_reply_marker(line, marker):
+    # Some models attach channel/control tokens directly to a framing marker.
+    token = r'(?:<channel\|>|<\|channel>|<\|channel\|>|<\|im_end\|>|<\|eot_id\|>)'
+    return re.fullmatch(rf'(?:{token}\s*)*{re.escape(marker)}(?:\s*{token})*', line.strip()) is not None
+
+
+def framed_answer(lines, begin, end):
+    start, answer = None, None
+    for index, line in enumerate(lines):
+        if is_reply_marker(line, begin):
+            start, answer = index + 1, None
+        elif start is not None and is_reply_marker(line, end):
+            answer = '\n'.join(lines[start:index]).strip() or None
+            start = None
+    return answer
+
+
 def metrics_prompt_choice(text):
     lines = text.splitlines()
     if not any(line.strip() == 'Help improve Hermes?' for line in lines):
@@ -84,14 +101,7 @@ def terminal_answer(begin, end):
         raise ValueError('Invalid answer markers')
     result = subprocess.run(['tmux', 'capture-pane', '-p', '-J', '-S', '-10000', '-t', ':0.0'],
                             capture_output=True, text=True, timeout=5, check=True)
-    lines = result.stdout.splitlines()
-    start, answer = None, None
-    for index, line in enumerate(lines):
-        if line.strip() == begin:
-            start = index + 1
-        elif start is not None and line.strip() == end:
-            answer = '\n'.join(lines[start:index]).strip()
-            start = None
+    answer = framed_answer(result.stdout.splitlines(), begin, end)
     if answer is not None and len(answer) > 1024 * 1024:
         raise ValueError('Agent answer exceeds transfer limit')
     return answer
