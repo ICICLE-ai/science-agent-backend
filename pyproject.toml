@@ -12,6 +12,7 @@ dependencies = [
     "python-multipart>=0.0.20",
     "aiohttp>=3.10",
     "pyte>=0.8",
+    "boto3>=1.39.3,<2",
 ]
 
 [dependency-groups]
