@@ -7,23 +7,71 @@ import json
 import os
 from pathlib import Path
 import resource
+import ssl
 import subprocess
 import sys
 import venv
 from uuid import UUID, uuid4
 from datetime import datetime, timezone
 
+NATIVE_CA_BUNDLE = Path('/etc/pki/tls/certs/ca-bundle.crt')
+SYSTEM_CA_BUNDLES = (Path('/etc/ssl/certs/ca-certificates.crt'), Path('/etc/ssl/ca-bundle.pem'))
+
+
+def ensure_ca_bundle():
+    """The pinned native wheel needs its compiled-in CA path, even on Debian."""
+    if NATIVE_CA_BUNDLE.is_file():
+        ssl.create_default_context(cafile=str(NATIVE_CA_BUNDLE))
+        return str(NATIVE_CA_BUNDLE)
+    if NATIVE_CA_BUNDLE.is_symlink() or NATIVE_CA_BUNDLE.exists():
+        raise RuntimeError('ArrayMorph native CA path exists but is not a usable certificate bundle; ask the pod administrator to repair it')
+    default = ssl.get_default_verify_paths().cafile
+    candidates = ([Path(default)] if default else []) + list(SYSTEM_CA_BUNDLES)
+    source = next((path.resolve() for path in candidates if path.is_file()), None)
+    if source is None:
+        raise RuntimeError('No OS CA certificate bundle is available; install ca-certificates in the agent pod')
+    ssl.create_default_context(cafile=str(source))
+    try:
+        NATIVE_CA_BUNDLE.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            NATIVE_CA_BUNDLE.symlink_to(source)
+        except FileExistsError:
+            pass  # Another request may have installed the same system trust link.
+        ssl.create_default_context(cafile=str(NATIVE_CA_BUNDLE))
+    except OSError:
+        raise RuntimeError('ArrayMorph needs the pod administrator to link the OS CA bundle at /etc/pki/tls/certs/ca-bundle.crt; TLS verification remains enabled') from None
+    return str(NATIVE_CA_BUNDLE)
+
+
+def redact(message, context):
+    for secret in (context.get('tapis_token'), (context.get('s3') or {}).get('access_key_id'),
+                   (context.get('s3') or {}).get('secret_access_key')):
+        if secret:
+            message = message.replace(secret, '[REDACTED]')
+    return message
+
 
 def worker(context, index, operation):
     s3 = context['s3']
-    if operation == 'cloud':
+    if operation in {'access', 'cloud'}:
         import boto3
         from botocore.config import Config
         client = boto3.client('s3', endpoint_url=s3['endpoint'], region_name=s3['region'],
             aws_access_key_id=s3['access_key_id'], aws_secret_access_key=s3['secret_access_key'],
             config=Config(signature_version='s3v4', connect_timeout=10, read_timeout=20,
                 retries={'max_attempts': 1}, s3={'addressing_style': 'path', 'payload_signing_enabled': True}))
-        listed = client.list_objects_v2(Bucket=s3['bucket'], Prefix=object_key(context, index) + '/')
+        try:
+            listed = client.list_objects_v2(Bucket=s3['bucket'], Prefix=object_key(context, index) + '/')
+        except Exception as exc:
+            response = getattr(exc, 'response', {})
+            print(json.dumps({'success': False, 'error': type(exc).__name__,
+                'http_status': response.get('ResponseMetadata', {}).get('HTTPStatusCode'),
+                's3_error_code': response.get('Error', {}).get('Code')}), flush=True)
+            raise SystemExit(1) from None
+        if operation == 'access':
+            print(json.dumps({'http_status': listed['ResponseMetadata']['HTTPStatusCode'], 'accessible': True}), flush=True)
+            client.close()
+            return
         objects = listed.get('Contents', [])
         if not objects:
             raise RuntimeError('No ArrayMorph cloud objects observed')
@@ -34,6 +82,7 @@ def worker(context, index, operation):
             if len(data) != item['Size']:
                 raise RuntimeError('Cloud object size mismatch')
         print(json.dumps({'http_status': listed['ResponseMetadata']['HTTPStatusCode'], 'object_count': len(objects)}), flush=True)
+        client.close()
         return
     import arraymorph
     import numpy as np
@@ -95,7 +144,7 @@ def main():
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
     parser = argparse.ArgumentParser()
     parser.add_argument('--context', required=True)
-    parser.add_argument('--worker', choices=('write', 'read', 'cloud'))
+    parser.add_argument('--worker', choices=('access', 'write', 'read', 'cloud'))
     parser.add_argument('--index', type=int, default=0)
     args = parser.parse_args()
     path = Path(args.context).resolve()
@@ -107,6 +156,7 @@ def main():
     report = {'method': 'ARRAYMORPH', 'executed': False, 'stages': [], 'files': [],
               'observed_at': datetime.now(timezone.utc).isoformat(),
               'compatibility': '0.2.0b4 bundled HDF5 with isolated native workers'}
+    stage = 'request_validation'
     try:
         s3 = context.get('s3')
         if not s3:
@@ -131,26 +181,40 @@ def main():
                 raise RuntimeError('Invalid upload size')
             if hashlib.sha256(source.read_bytes()).hexdigest() != item['sha256']:
                 raise RuntimeError('Uploaded file checksum differs')
-        if not Path('/etc/pki/tls/certs/ca-bundle.crt').is_file():
-            raise RuntimeError('Native S3 CA bundle missing; follow the ArrayMorph installation skill')
+        stage = 'tls_setup'
+        ca_bundle = ensure_ca_bundle()
+        report['stages'].append('OS CA certificates configured; TLS verification enabled')
+        stage = 'environment_setup'
         python = ensure_environment()
         report['stages'].append('ArrayMorph environment ready')
         env = os.environ.copy()
         home = path.parent / 'arraymorph-home'
         home.mkdir(mode=0o700, exist_ok=True)
         env['HOME'] = str(home)
+        env['AWS_CA_BUNDLE'] = ca_bundle
         for key in ('HDF5_PLUGIN_PATH', 'HDF5_VOL_CONNECTOR'):
             env.pop(key, None)
         # Run boto3 in the same isolated environment, not the agent interpreter.
         for index, item in enumerate(files):
             key = object_key(context, index)
             recovered = {}
-            for operation in ('write', 'read', 'cloud'):
+            for operation in ('access', 'write', 'read', 'cloud'):
+                stage = operation
+                if operation == 'write':
+                    report['executed'] = True
                 child = subprocess.run([str(python), __file__, '--context', str(path),
                     '--worker', operation, '--index', str(index)], capture_output=True, text=True, timeout=90, env=env)
-                if child.returncode:
-                    raise RuntimeError('ArrayMorph ' + operation + ' failed; native worker exit ' + str(child.returncode))
                 lines = [line for line in child.stdout.splitlines() if line.startswith('{')]
+                if child.returncode:
+                    if lines:
+                        evidence = json.loads(lines[-1])
+                        for field in ('http_status', 's3_error_code'):
+                            if evidence.get(field) is not None:
+                                report[field] = evidence[field]
+                    report['diagnostics'] = redact((child.stderr or child.stdout)[-4000:], context)
+                    raise RuntimeError('ArrayMorph ' + operation + ' failed; native worker exit ' + str(child.returncode))
+                if not lines:
+                    raise RuntimeError('ArrayMorph ' + operation + ' returned no structured evidence')
                 evidence = json.loads(lines[-1])
                 if operation == 'read':
                     recovered = evidence
@@ -161,11 +225,7 @@ def main():
                                     'bytes': item['size'], **recovered, **evidence})
         report.update(executed=True, success=True)
     except Exception as exc:
-        message = str(exc)
-        for secret in (context.get('s3') or {}).values():
-            if isinstance(secret, str) and secret and secret not in ('tacc',):
-                message = message.replace(secret, '[REDACTED]')
-        report.update(success=False, error=message)
+        report.update(success=False, failed_stage=stage, error=redact(str(exc), context))
     observations = path.parent / 'observations'
     observations.mkdir(mode=0o700, exist_ok=True)
     (observations / ('arraymorph-' + str(uuid4()) + '.json')).write_text(json.dumps(report))

@@ -22,21 +22,29 @@ class PodFiles:
         self.decoder = codecs.getincrementaldecoder('utf-8')('replace')
         self.request_id = 0
 
+    def _response(self):
+        start = self.buffer.find(self.marker + '{')
+        while start >= 0:
+            payload = self.buffer[start+len(self.marker):]
+            try:
+                data, end = json.JSONDecoder().raw_decode(payload)
+            except json.JSONDecodeError:
+                # A tmux repaint can interrupt a reply and then replay complete
+                # replies. Do not let that earlier fragment hide the valid ACK.
+                start = self.buffer.find(self.marker + '{', start + len(self.marker))
+                continue
+            self.buffer = payload[end:]
+            if 'error' in data:
+                raise RuntimeError('Remote agent: file transfer failed (' + data['error'] + ').')
+            return data
+        return None
+
     async def receive(self):
         async with asyncio.timeout(30):
             while True:
-                start = self.buffer.find(self.marker + '{')
-                if start >= 0:
-                    payload = self.buffer[start+len(self.marker):]
-                    try:
-                        data, end = json.JSONDecoder().raw_decode(payload)
-                    except json.JSONDecodeError:
-                        data = None
-                    if data is not None:
-                        self.buffer = payload[end:]
-                        if 'error' in data:
-                            raise RuntimeError('Remote agent: file transfer failed (' + data['error'] + ').')
-                        return data
+                data = self._response()
+                if data is not None:
+                    return data
                 message = await self.ws.receive()
                 if message.type in {aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR}:
                     raise RuntimeError('Remote agent: file transfer terminal disconnected.')
