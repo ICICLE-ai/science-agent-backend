@@ -87,18 +87,10 @@ def execute(context_path, operation, job_id=None, output_dir=None):
     try:
         result = subprocess.run([sys.executable, str(Path(__file__).parent.parent / 'arraymorph/store_files.py'),
                                  '--context', str(path)], capture_output=True, text=True, timeout=600)
-        try:
-            storage = json.loads(result.stdout or '{}')
-        except ValueError:
-            storage = {}
-        if not isinstance(storage, dict):
-            storage = {}
-        if storage:
-            report['arraymorph'] = storage
-        if result.returncode or storage.get('success') is not True:
-            reason = storage.get('error') or 'The storage tool returned no structured error; inspect the ArrayMorph observation.'
-            failed = storage.get('failed_stage', 'unknown')
-            raise RuntimeError(f'ArrayMorph storage stopped at {failed}: {reason} No Smart Labeler job was submitted.')
+        if result.returncode:
+            raise RuntimeError('ArrayMorph storage failed; inspect the ArrayMorph observation, do not submit a job.')
+        storage = json.loads(result.stdout)
+        report['arraymorph'] = storage
         report['stages'].append('ArrayMorph S3 write and fresh-process recovery verified')
         if operation == 'store':
             report['success'] = True
