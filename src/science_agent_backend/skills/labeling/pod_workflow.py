@@ -12,7 +12,6 @@ from urllib.request import Request, build_opener, HTTPRedirectHandler
 from uuid import uuid4
 
 from run_arraymorph_labeling_workflow import stage_recovered_image, submit_smart_labeler
-from run_autonomous_labeling_setup import SetupError
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -113,8 +112,6 @@ def execute(context_path, operation, job_id=None, output_dir=None):
         report['success'] = True
     except Exception as exc:
         report['error'] = str(exc)
-        if isinstance(exc, SetupError):
-            report['failed_stage'] = exc.stage
     finally:
         serialized = json.dumps(report)
         for secret in [context.get('tapis_token',''), *(context.get('s3') or {}).values()]:

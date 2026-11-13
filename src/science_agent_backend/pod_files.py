@@ -22,49 +22,40 @@ class PodFiles:
         self.decoder = codecs.getincrementaldecoder('utf-8')('replace')
         self.request_id = 0
 
-    def _response(self):
-        prefix = self.marker + '{'
-        start = self.buffer.find(prefix)
-        while start >= 0:
-            payload = self.buffer[start+len(self.marker):]
-            try:
-                data, end = json.JSONDecoder().raw_decode(payload)
-            except json.JSONDecodeError:
-                # A tmux repaint can truncate an ACK and then replay it in full.
-                start = self.buffer.find(prefix, start + len(prefix))
-                continue
-            self.buffer = payload[end:]
-            return data
-        return None
-
     async def receive(self):
-        while True:
-            data = self._response()
-            if data is not None:
-                return data
-            message = await self.ws.receive()
-            if message.type in {aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR}:
-                raise RuntimeError('Remote agent: file transfer terminal disconnected.')
-            if message.type == aiohttp.WSMsgType.BINARY and message.data[:1] == b'0':
-                self.buffer += self.decoder.decode(message.data[1:])
-                self.buffer = re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]', '', self.buffer)
-                self.buffer = self.buffer[-262144:]
+        async with asyncio.timeout(30):
+            while True:
+                start = self.buffer.find(self.marker + '{')
+                if start >= 0:
+                    payload = self.buffer[start+len(self.marker):]
+                    try:
+                        data, end = json.JSONDecoder().raw_decode(payload)
+                    except json.JSONDecodeError:
+                        data = None
+                    if data is not None:
+                        self.buffer = payload[end:]
+                        if 'error' in data:
+                            raise RuntimeError('Remote agent: file transfer failed (' + data['error'] + ').')
+                        return data
+                message = await self.ws.receive()
+                if message.type in {aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR}:
+                    raise RuntimeError('Remote agent: file transfer terminal disconnected.')
+                if message.type == aiohttp.WSMsgType.BINARY and message.data[:1] == b'0':
+                    self.buffer += self.decoder.decode(message.data[1:])
+                    self.buffer = re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]', '', self.buffer)
+                    self.buffer = self.buffer[-262144:]
 
     async def command(self, value):
         self.request_id += 1
         request = {**value, 'request_id': self.request_id}
         await self.ws.send_bytes(b'0' + json.dumps(request, separators=(',', ':')).encode() + b'\n')
-        try:
-            async with asyncio.timeout(30):
-                while True:
-                    response = await self.receive()
-                    # Check the ID before interpreting a replayed ACK or error.
-                    if response.pop('request_id', None) == self.request_id:
-                        if 'error' in response:
-                            raise RuntimeError('Remote agent: file transfer failed (' + response['error'] + ').')
-                        return response
-        except TimeoutError:
-            raise RuntimeError('Remote agent: file transfer acknowledgement timed out.') from None
+        async with asyncio.timeout(30):
+            while True:
+                response = await self.receive()
+                # tmux can replay old screen lines while refreshing. An ACK is
+                # usable only when it belongs to the command just sent.
+                if response.pop('request_id', None) == self.request_id:
+                    return response
 
     async def put(self, path, data):
         checksum = hashlib.sha256(data).hexdigest()
@@ -107,13 +98,7 @@ async def file_channel(url, token=''):
             await ws.send_bytes(b'0\r')
             channel = PodFiles(ws, marker)
             try:
-                try:
-                    async with asyncio.timeout(30):
-                        channel.info = await channel.receive()
-                except TimeoutError:
-                    raise RuntimeError('Remote agent: file transfer channel did not become ready.') from None
-                if not channel.info.get('ready'):
-                    raise RuntimeError('Remote agent: file transfer receiver did not confirm readiness.')
+                channel.info = await channel.receive()
                 yield channel
             finally:
                 if not ws.closed:

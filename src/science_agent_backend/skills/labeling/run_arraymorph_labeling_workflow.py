@@ -393,13 +393,7 @@ def submit_smart_labeler(
     if not any(str(path).endswith("/" + Path(staged["path"]).name) for path in observed_source_paths):
         raise SetupError("smart-labeler-preflight", "The staged source image was not observed by Smart Labeler")
 
-    try:
-        models = client.get("/patra/list", {"new": "true"})
-    except RuntimeError as exc:
-        raise SetupError(
-            "smart-labeler-preflight",
-            f"Patra model lookup failed before pipeline creation or job submission: {exc}",
-        ) from exc
+    models = client.get("/patra/list", {"new": "true"})
     missing_models = [
         model_id for model_id in (BIOCLIP_ID, OWLV2_ID)
         if not response_contains_model(models, model_id)
