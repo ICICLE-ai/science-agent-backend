@@ -18,7 +18,10 @@ async def transfer_attachments(channel, prefix, sid, subject, uploaded_files, pr
         name = info['name']
         if Path(name).name != name or name in {'.', '..'} or '\\' in name or '\x00' in name:
             raise RuntimeError('Invalid upload filename.')
-        attachment = await database.get_attachment(sid, subject, name)
+        try:
+            attachment = await database.get_attachment(sid, subject, name)
+        except FileNotFoundError:
+            raise RuntimeError(f'Attachment "{name}" is missing. Attach the file again before retrying.') from None
         total += attachment['size']
         if total > config.UPLOAD_LIMIT:
             raise RuntimeError('Uploaded files exceed the remote transfer limit.')
@@ -84,6 +87,10 @@ async def run(sid, identity, message, send):
                 f'Read {root}/{prefix}/skill/arraymorph/SKILL.md for ArrayMorph storage. '
                 f'For user-requested storage/labeling execute python3 {root}/{prefix}/skill/labeling/pod_workflow.py '
                 f'--context {root}/{private} store (storage only) or label (storage, recovery, staging, new pipeline and job submission). '
+                'Choose the operation from the current request, not earlier conversation turns. '
+                'For a request to just upload to S3 with ArrayMorph, execute store and stop after storage verification. '
+                'Do not call Smart Labeler, stage in Tapis, or submit jobs for storage-only requests. '
+                'Wait for the workflow result before reporting success or failure. '
                 'You are authorized to set up the isolated ArrayMorph environment inside this pod for these requested operations. '
                 'Do not execute writes for requests that only ask for advice or status. '
                 'Use status --job-id UUID to check an existing job; never repeat label to check status. '
