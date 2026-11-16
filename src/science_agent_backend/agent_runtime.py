@@ -8,7 +8,7 @@ import hashlib
 from pathlib import Path
 from uuid import uuid4
 from . import config, database
-from .pod_terminal import PodTerminal
+from .pod_terminal import PodTerminal, PodTerminalDisconnected
 from .pod_files import file_channel
 
 
@@ -31,6 +31,26 @@ async def transfer_attachments(channel, prefix, sid, subject, uploaded_files, pr
     return files
 
 
+def verified_storage_reply(observations, run_id, files):
+    if not files:
+        return None
+    expected = sorted((f['name'], f['size'], f['sha256']) for f in files)
+    for report in observations:
+        if (report.get('run_id') != run_id or report.get('success') is not True
+                or 'tapis_staging' in report or 'smart_labeler' in report):
+            continue
+        storage = report.get('arraymorph') or {}
+        if storage.get('success') is not True or storage.get('http_status') != 200:
+            continue
+        recovered = sorted((f.get('name', ''), f.get('bytes', 0), f.get('sha256', ''))
+                           for f in storage.get('files', []) if f.get('verified') is True)
+        if recovered == expected:
+            return ('ArrayMorph uploaded the attached files to S3 and verified that the recovered '
+                    'files match the originals. The agent terminal disconnected after storage; '
+                    'no retry is needed.')
+    return None
+
+
 async def run(sid, identity, message, send):
     if not config.POD_URL:
         raise RuntimeError('Agent service URL is not configured.')
@@ -48,6 +68,17 @@ async def run(sid, identity, message, send):
         prefix = f'sessions/{sid}/runs/{run_id}'
         private = prefix + '/context.json'
         written = False
+
+        async def finish_pod_run():
+            nonlocal written
+            async with file_channel(config.POD_URL, identity.token) as channel:
+                await channel.command({'op': 'remove', 'path': private})
+                records = await channel.command({'op': 'observations', 'path': prefix + '/observations'})
+            await database.mutate(sid, identity.subject, lambda d: d['execution_log'].append(
+                {'type':'pod_services', 'run_id':run_id, **records}))
+            written = False
+            return records['observations']
+
         try:
             state = await database.get(sid, identity.subject)
             from .s3_credentials import load_profile
@@ -97,7 +128,18 @@ async def run(sid, identity, message, send):
                 'Report completed stages, pipeline/job identifiers, and exact job status. Submitted is not completed. '
                 'Do not claim classification or segmentation results until the job has finished and outputs are verified. '
                 f'Uploaded files: {json.dumps(files)}')
-            answer = await PodTerminal(config.POD_URL, identity.token).request(prompt, config.POD_TIMEOUT, progress)
+            completion_detail = 'Agent response received'
+            try:
+                answer = await PodTerminal(config.POD_URL, identity.token).request(prompt, config.POD_TIMEOUT, progress)
+            except PodTerminalDisconnected:
+                try:
+                    records = await finish_pod_run()
+                except Exception:
+                    records = []
+                answer = verified_storage_reply(records, run_id, files)
+                if answer is None:
+                    raise
+                completion_detail = 'S3 upload verified from the workflow record'
             for secret in (identity.token, (s3 or {}).get('access_key_id',''), (s3 or {}).get('secret_access_key','')):
                 if not secret:
                     continue
@@ -108,7 +150,7 @@ async def run(sid, identity, message, send):
             await send(dict(type='response_chunk', id=item['id'], text=answer))
             await send(dict(type='response_end', id=item['id']))
             await send(dict(type='workflow_progress', run_id=run_id, step_id='agent', label='Remote Science Agent',
-                            status='completed', timestamp=time.time(), detail='Agent response received'))
+                            status='completed', timestamp=time.time(), detail=completion_detail))
         except (Exception, asyncio.CancelledError):
             await send(dict(type='workflow_progress', run_id=run_id, step_id='agent', label='Remote Science Agent',
                             status='failed', timestamp=time.time(),
@@ -117,11 +159,7 @@ async def run(sid, identity, message, send):
         finally:
             if written:
                 try:
-                    async with file_channel(config.POD_URL, identity.token) as channel:
-                        await channel.command({'op': 'remove', 'path': private})
-                        observations = await channel.command({'op': 'observations', 'path': prefix + '/observations'})
-                    await database.mutate(sid, identity.subject, lambda d: d['execution_log'].append(
-                        {'type':'pod_services', 'run_id':run_id, **observations}))
+                    await finish_pod_run()
                 except Exception:
                     await progress('Private context cleanup could not be confirmed.')
             fcntl.flock(lock, fcntl.LOCK_UN)

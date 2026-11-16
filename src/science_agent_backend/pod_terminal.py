@@ -12,6 +12,10 @@ import pyte
 from .pod_receiver import framed_answer, is_reply_marker
 
 
+class PodTerminalDisconnected(RuntimeError):
+    pass
+
+
 class PodTerminal:
     def __init__(self, url, token=''):
         parsed = urlsplit(url)
@@ -145,7 +149,7 @@ class PodTerminal:
         except TimeoutError:
             return False
         if message.type in {aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.ERROR}:
-            raise RuntimeError('Remote agent: terminal disconnected before the response completed.')
+            raise PodTerminalDisconnected('Remote agent: terminal disconnected before the response completed.')
         if message.type == aiohttp.WSMsgType.BINARY and message.data[:1] == b'0':
             stream.feed(message.data[1:])
             return True

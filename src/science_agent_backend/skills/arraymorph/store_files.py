@@ -7,11 +7,66 @@ import json
 import os
 from pathlib import Path
 import resource
+import ssl
 import subprocess
 import sys
 import venv
 from uuid import UUID, uuid4
 from datetime import datetime, timezone
+
+NATIVE_CA_BUNDLE = Path('/etc/pki/tls/certs/ca-bundle.crt')
+SYSTEM_CA_BUNDLES = (
+    Path('/etc/ssl/certs/ca-certificates.crt'),
+    Path('/etc/ssl/ca-bundle.pem'),
+    Path('/etc/ssl/cert.pem'),
+)
+
+
+def validate_ca_bundle(path):
+    ssl.create_default_context(cafile=str(path))
+
+
+def ensure_ca_bundle():
+    """Prepare the pinned native connector's CA path from the pod's OS trust."""
+    destination = NATIVE_CA_BUNDLE
+    if not destination.is_symlink() and not destination.exists():
+        # Use the compiled OpenSSL default, not a request or environment override.
+        default = ssl.get_default_verify_paths().openssl_cafile
+        candidates = SYSTEM_CA_BUNDLES + ((Path(default),) if default else ())
+        for candidate in candidates:
+            try:
+                source = candidate.resolve(strict=True)
+                if not source.is_file():
+                    continue
+                validate_ca_bundle(source)
+            except (OSError, RuntimeError):  # Unreadable, invalid, or cyclic bundle path.
+                continue
+            break
+        else:
+            raise RuntimeError('No usable OS CA bundle was found in the agent pod.') from None
+
+        try:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.symlink_to(source)
+            return True
+        except FileExistsError:
+            # Another request may have prepared the path since the check.
+            pass
+        except OSError:
+            raise RuntimeError(
+                f'The agent pod cannot create {destination}. Have the pod administrator '
+                'provide its OS CA bundle at that path; TLS verification remains enabled.'
+            ) from None
+    try:
+        if not destination.is_file():
+            raise OSError('Not a readable file')
+        validate_ca_bundle(destination)
+    except OSError:
+        raise RuntimeError(
+            f'ArrayMorph CA path {destination} is not a usable bundle. '
+            'Have the pod administrator repair it; the existing path was not changed.'
+        ) from None
+    return False
 
 
 def worker(context, index, operation):
@@ -131,8 +186,12 @@ def main():
                 raise RuntimeError('Invalid upload size')
             if hashlib.sha256(source.read_bytes()).hexdigest() != item['sha256']:
                 raise RuntimeError('Uploaded file checksum differs')
-        if not Path('/etc/pki/tls/certs/ca-bundle.crt').is_file():
-            raise RuntimeError('Native S3 CA bundle missing; follow the ArrayMorph installation skill')
+        try:
+            if ensure_ca_bundle():
+                report['stages'].append('ArrayMorph TLS CA link created from the pod OS bundle')
+        except RuntimeError:
+            report['failed_stage'] = 'tls_setup'
+            raise
         python = ensure_environment()
         report['stages'].append('ArrayMorph environment ready')
         env = os.environ.copy()
