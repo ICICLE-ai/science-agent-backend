@@ -1,6 +1,6 @@
 # ICICLE catalog metadata for the backend repository (not deployment settings).
 # Pending release-team confirmation: release status and remaining platform dependencies.
-- id: "ScienceAgentBackend:1.0.1"
+- id: "ScienceAgentBackend:2.2.1"
   owner: "Hansol Lee"
   primaryThrust: "core/CI4AI"
   name: "Science Agent Interface"
@@ -10,7 +10,7 @@
     requests. This backend authenticates Tapis users, preserves their conversations
     and uploaded files, and supplies a remote agent with user-specific context for
     ArrayMorph storage and Smart Labeler workflows.
-  componentVersion: "0.1.0"
+  componentVersion: "2.2.1"
   # Release date supplied by the maintainer: 2026-10-15. Catalog stores YYYY-MM.
   targetIcicleRelease: "2026-11"
   # Maintainer confirmed the currently registered ArrayMorph and Smart Labeler versions.

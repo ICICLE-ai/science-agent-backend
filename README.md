@@ -28,32 +28,7 @@ This project continues the MIT license of the original
 
 # Tutorials
 
-## Use Science Agent for an image workflow
-
-Use the [frontend](https://github.com/ICICLE-ai/science-agent-frontend) to interact with the service; the backend is not a separate chat interface. This walkthrough requires an authenticated ICICLE user, a reachable agent pod, a selected S3 credential profile, and access to the configured Tapis and Smart Labeler resources.
-
-1. Open Science Agent through the ICICLE hub and create a conversation.
-2. In Settings, save or import an S3 credential profile and select it. Profiles belong to the authenticated user; saving a profile alone does not select it.
-3. Upload one image and enter:
-
-   > Upload this image with ArrayMorph and use Smart Labeler to label it.
-
-4. Start the request. The backend retrieves that user's conversation, uploaded file, and selected credentials, then transfers the files and service instructions to the agent.
-5. Follow the available progress messages. The agent performs the service work: ArrayMorph storage and recovery, Tapis staging, creation of a Smart Labeler pipeline, and job submission.
-6. Review the recorded stages and returned pipeline/job identifiers. If a step fails, use the report to identify where the workflow stopped before retrying a state-changing request.
-7. Ask a follow-up using the returned job ID:
-
-   > Check the status of job JOB_ID without creating a new pipeline or submitting another job.
-
-A submission response confirms only what was observed at submission time. Finished labels or classifications require a completed external job and verified outputs.
-
-## Store data without labeling
-
-Upload a file, select an S3 profile, and ask:
-
-> Store this uploaded file with ArrayMorph in my selected S3 bucket. Do not submit a Smart Labeler job.
-
-The agent uses the selected credentials rather than a shared default bucket. Review the returned storage location and recovery verification. Reopen the same conversation later to review the report or continue with another request.
+[Science Agent tutorials with screenshots](https://github.com/ICICLE-ai/science-agent-frontend#tutorials)
 
 ---
 

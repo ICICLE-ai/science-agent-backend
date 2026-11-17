@@ -42,8 +42,12 @@ It does not establish that ordinary h5py usage is stable. For this wheel only,
 configure_s3(addressing_style=False) gives the required path-style URL; this
 differs from the current README's API intent. Do not apply it to future versions
 without retesting. Its native TLS client also requires
-/etc/pki/tls/certs/ca-bundle.crt; if absent, link the existing system CA bundle
-there with appropriate permission. Never disable certificate verification.
+`/etc/pki/tls/certs/ca-bundle.crt`. Before each upload, `store_files.py` validates
+that path or recreates a missing link to a trusted CA bundle already installed
+in the pod. No certificate is transferred with the request. If the pod user
+cannot create the link (for example, if `/etc` is read-only), the pod image or
+startup configuration must provide the bundle at that path. An existing
+unusable path is reported, never overwritten. TLS verification stays enabled.
 
 The opt-in install_probe.py installs an isolated environment and runs the real
 probe. It receives private s3.key and nonsecret probe-config.json files, deletes
