@@ -97,7 +97,10 @@ async def run(sid, identity, message, send):
                     session_id=sid, run_id=run_id, user_request=message,
                     storage_namespace=hashlib.sha256(identity.subject.encode()).hexdigest(),
                     tapis_base_url=config.TAPIS_BASE_URL, tapis_system='expanse-tapis-static',
-                    tapis_base_dir=f'/users/{identity.username}/demo')).encode())
+                    tapis_base_dir=f'/users/{identity.username}/demo',
+                    previous_workflows=[observation for entry in state['execution_log']
+                        if entry.get('type') == 'pod_services' for observation in entry.get('observations', [])
+                        if 'stages' in observation and 'run_id' in observation][-10:])).encode())
             context = [{'role': h['role'], 'content': h['content']} for h in state['history'][-8:]]
             previous_runs = []
             for entry in state['execution_log']:
@@ -125,6 +128,10 @@ async def run(sid, identity, message, send):
                 'You are authorized to set up the isolated ArrayMorph environment inside this pod for these requested operations. '
                 'Do not execute writes for requests that only ask for advice or status. '
                 'Use status --job-id UUID to check an existing job; never repeat label to check status. '
+                'If no job ID is supplied, status uses the latest job recorded for this conversation. '
+                'When a job is complete, status automatically reads its result JSON and returns result_analysis. '
+                'Explain the per-file counts, labels, score statistics and limitations from result_analysis, '
+                'not just that the job finished. Missing or unreadable output is not zero detections. '
                 'Report completed stages, pipeline/job identifiers, and exact job status. Submitted is not completed. '
                 'Do not claim classification or segmentation results until the job has finished and outputs are verified. '
                 f'Uploaded files: {json.dumps(files)}')
@@ -145,9 +152,18 @@ async def run(sid, identity, message, send):
                     continue
                 answer = answer.replace(secret, '[REDACTED]')
             item = dict(id=str(uuid4()), role='assistant', tag='answer', content=answer)
+            records = await finish_pod_run() if written else []
+            if any(record.get('result_analysis', {}).get('files') for record in records):
+                from .result_files import save_result_files
+                downloads, download_errors = await save_result_files(sid, identity.subject, identity.token, records, item['id'])
+                if download_errors:
+                    item['content'] += '\n\nSome result JSON downloads could not be saved. The analysis above does not confirm their availability for download.'
+                if downloads:
+                    current = await database.get(sid, identity.subject)
+                    await send(dict(type='output_files', files=current['output_files']))
             await database.mutate(sid, identity.subject, lambda d: d['history'].append(item))
             await send(dict(type='response_start', id=item['id'], role='assistant', tag='answer'))
-            await send(dict(type='response_chunk', id=item['id'], text=answer))
+            await send(dict(type='response_chunk', id=item['id'], text=item['content']))
             await send(dict(type='response_end', id=item['id']))
             await send(dict(type='workflow_progress', run_id=run_id, step_id='agent', label='Remote Science Agent',
                             status='completed', timestamp=time.time(), detail=completion_detail))

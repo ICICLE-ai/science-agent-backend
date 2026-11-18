@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 from urllib.error import HTTPError
 from urllib.parse import urlencode
@@ -12,6 +13,7 @@ from urllib.request import Request, build_opener, HTTPRedirectHandler
 from uuid import uuid4
 
 from run_arraymorph_labeling_workflow import stage_recovered_image, submit_smart_labeler
+from labeling_results import inspect_results
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -30,29 +32,45 @@ class Client:
         token = self.context['tapis_token']
         request = Request(url, method=method, data=json.dumps(body).encode() if body is not None else None,
                           headers={'Tapis-Token': token, 'X-Tapis-Token': token, 'Content-Type':'application/json'})
-        record = dict(method=method, url=url, executed=True,
-                      observed_at=datetime.now(timezone.utc).isoformat())
-        if body is not None:
-            record['request_body'] = body
-        try:
-            with build_opener(NoRedirect).open(request, timeout=120) as response:
-                record['http_status'] = response.status
-                value = json.load(response)
-                record['response'] = value
-                return value
-        except Exception as exc:
-            record['http_status'] = getattr(exc, 'code', None)
-            if isinstance(exc, HTTPError):
-                record['error_body'] = exc.read(4096).decode('utf-8', errors='replace')
-            raise RuntimeError(f'{method} {path} failed (HTTP {record["http_status"]}). Check recorded observations before retrying writes.') from None
-        finally:
-            (self.directory / 'observations').mkdir(exist_ok=True)
-            serialized = json.dumps(record)
-            for secret in (token, (self.context.get('s3') or {}).get('access_key_id'),
-                           (self.context.get('s3') or {}).get('secret_access_key')):
-                if secret:
-                    serialized = serialized.replace(secret, '[REDACTED]')
-            (self.directory / 'observations' / (str(uuid4())+'.json')).write_text(serialized)
+        max_attempts = 2 if method == 'POST' and path == '/pipe/create' else 1
+        for attempt in range(1, max_attempts + 1):
+            record = dict(method=method, url=url, executed=True, attempt=attempt,
+                          retry_scheduled=False,
+                          observed_at=datetime.now(timezone.utc).isoformat())
+            if body is not None:
+                record['request_body'] = body
+            try:
+                with build_opener(NoRedirect).open(request, timeout=120) as response:
+                    record['http_status'] = response.status
+                    if path.startswith('/get_file/'):
+                        raw = response.read(16 * 1024 * 1024 + 1)
+                        if len(raw) > 16 * 1024 * 1024:
+                            raise ValueError('Result JSON exceeds the 16 MiB inspection limit.')
+                        value = json.loads(raw)
+                        record['response'] = {'filePath': (query or {}).get('filePath'), 'bytes': len(raw)}
+                    else:
+                        value = json.load(response)
+                        record['response'] = value
+                    return value
+            except Exception as exc:
+                record['http_status'] = getattr(exc, 'code', None)
+                if isinstance(exc, HTTPError):
+                    record['error_body'] = exc.read(4096).decode('utf-8', errors='replace')
+                    exc.close()
+                if isinstance(exc, HTTPError) and exc.code == 500 and attempt < max_attempts:
+                    record['retry_scheduled'] = True
+                    record['retry_delay_seconds'] = 1
+                else:
+                    raise RuntimeError(f'{method} {path} failed (HTTP {record["http_status"]}). Check recorded observations before retrying writes.') from None
+            finally:
+                (self.directory / 'observations').mkdir(exist_ok=True)
+                serialized = json.dumps(record)
+                for secret in (token, (self.context.get('s3') or {}).get('access_key_id'),
+                               (self.context.get('s3') or {}).get('secret_access_key')):
+                    if secret:
+                        serialized = serialized.replace(secret, '[REDACTED]')
+                (self.directory / 'observations' / (str(uuid4())+'.json')).write_text(serialized)
+            time.sleep(1)
 
     def get(self, path, query=None):
         return self.request('GET', path, query=query)
@@ -67,16 +85,30 @@ def execute(context_path, operation, job_id=None, output_dir=None):
     directory = path.parent
     client = Client(context, directory)
     if operation in {'status', 'results'}:
+        previous = [entry['smart_labeler'] for entry in context.get('previous_workflows', [])
+                    if isinstance(entry.get('smart_labeler'), dict)]
+        local_report = directory / 'workflow-result.json'
+        if local_report.exists():
+            previous.append(json.loads(local_report.read_text()).get('smart_labeler', {}))
+        previous = [entry for entry in previous if (entry.get('job') or {}).get('uuid')]
+        if not job_id and previous:
+            job_id = (previous[-1].get('job') or {}).get('uuid')
         if not job_id or any(c not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_' for c in job_id):
             raise ValueError('A valid job ID is required.')
-        result = {'job_id': job_id, 'response': client.get('/get_job_status/' + job_id)}
-        if operation == 'results':
-            if not output_dir:
-                raise ValueError('Provide the output directory observed during submission; do not guess it.')
-            if '..' in Path(output_dir).parts:
-                raise ValueError('Invalid output directory.')
-            result['output_files'] = client.get('/get_files/0/' + context['tapis_system'], {'dir':output_dir})
-        return result
+        saved = next((entry for entry in reversed(previous) if (entry.get('job') or {}).get('uuid') == job_id), {})
+        result = inspect_results(client, job_id, saved, output_dir)
+        result.update(run_id=context['run_id'], stages=['Smart Labeler job status checked'], smart_labeler=saved)
+        if result['result_analysis']['state'] in {'analyzed', 'partial'}:
+            result['stages'].append('Completed job result JSON inspected')
+        serialized = json.dumps(result)
+        for secret in (context.get('tapis_token'), (context.get('s3') or {}).get('access_key_id'),
+                       (context.get('s3') or {}).get('secret_access_key')):
+            if secret:
+                serialized = serialized.replace(secret, '[REDACTED]')
+        observations = directory / 'observations'
+        observations.mkdir(exist_ok=True)
+        (observations / ('results-' + str(uuid4()) + '.json')).write_text(serialized)
+        return json.loads(serialized)
     report_path = directory / 'workflow-result.json'
     if report_path.exists():
         return json.loads(report_path.read_text())

@@ -210,7 +210,8 @@ def serve(marker):
                         data = json.loads(record.read_text())
                         records.append({k: data[k] for k in
                             ('method', 'url', 'http_status', 'observed_at', 'executed', 'error', 'success', 'files', 'stages',
-                             'response', 'request_body', 'error_body', 'smart_labeler', 'tapis_staging', 'arraymorph', 'run_id') if k in data})
+                             'response', 'request_body', 'error_body', 'smart_labeler', 'tapis_staging', 'arraymorph', 'run_id',
+                             'job_id', 'result_analysis') if k in data})
                     reply({'observations': records})
                 elif op in ('start-arraymorph-probe', 'arraymorph-probe-status'):
                     relative = Path(request['path'])

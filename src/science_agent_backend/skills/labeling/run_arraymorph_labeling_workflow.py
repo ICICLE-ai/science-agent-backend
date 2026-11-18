@@ -382,6 +382,9 @@ def submit_smart_labeler(
             "count": annotation["count"],
         }
         summary["request_summary"] = command
+        summary["output_directory"] = annotation["output_dir"]
+        summary["system"] = staged["system"]
+        summary["result_kind"] = "class-support"
         return summary
 
     emit_progress("smart-labeler-preflight", "running")
@@ -488,6 +491,7 @@ def submit_smart_labeler(
             "message": status.get("message") if isinstance(status, dict) else None,
         },
         "input_directory": detection_body["queryImagePath"],
+        "result_kind": "proposals",
         "output_directory": detection_body["outputDir"],
         "system": detection_body["system"],
         "request_summary": command,

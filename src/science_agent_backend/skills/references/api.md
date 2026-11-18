@@ -752,8 +752,34 @@ Responses: `200`, `422`.
 
 ## Response Rules
 
+### Completed-job follow-ups
+
+Use `labeling/pod_workflow.py --context PATH status [--job-id UUID]` to check an
+existing job. The latest submitted job can be resolved from this conversation's
+private `previous_workflows`; do not rerun `label`.
+
+On `FINISHED` or `COMPLETED`, the helper lists JSON files with
+`GET /get_files/{digid}/{system}` and reads their content with
+`GET /get_file/{digid}/{system}?filePath=...`. It uses the recorded output root:
+`proposals/generated_boxes` for detection proposals, `detections` for
+classification, or `class_supports/generated_boxes` for class-support outputs.
+The output root itself is a fallback. Paths must come from that job's record or
+an explicit user-provided output location, not from guessed session paths.
+
+The native JSON schema has `annotations` entries with `image_path`, `class`,
+`bounding_box`, and optional `score`. COCO `annotations`/`categories` are also
+recognized. Reports contain per-file counts, per-label and per-image counts, and
+available score statistics. Multiple model files remain separate, not a combined
+unique-object count. At most 20 files of up to 16 MiB each are inspected; partial
+results and limits are explicitly reported. Missing output or unsupported JSON
+is not evidence of zero detections, and scores do not establish accuracy.
+
 - Report the observed HTTP status and response fields; do not invent fields.
 - For `422`, summarize each validation error's `loc`, `msg`, and `type`.
 - For binary image, file, or log responses, save only to a user-approved path.
 - Never expose the Tapis token or Vault material.
-- Never automatically retry a state-changing call.
+- The pod workflow retries `POST /pipe/create` once after one second only for
+  HTTP `500`, recording both attempts. Do not add retries or restart the workflow.
+  Never automatically retry other state-changing calls, including job submission,
+  or retry on timeouts or other HTTP statuses. A `500` may still have side effects;
+  inspect existing records if both pipeline-creation attempts fail.

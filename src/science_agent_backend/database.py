@@ -77,7 +77,7 @@ def attachment_info(sid, attachment_id, name, content_type, size, sha256):
                 sha256=sha256, object_name=f'{sid}/{name}', source='user', storage='postgres')
 
 
-async def put_attachment(sid, subject, name, content_type, content):
+async def put_attachment(sid, subject, name, content_type, content, *, output_metadata=None):
     digest = hashlib.sha256(content).hexdigest()
     async with await connect() as conn:
         row = await (await conn.execute("SELECT data FROM science_agent_sessions WHERE id=%s AND owner_subject=%s AND source='user' FOR UPDATE",
@@ -93,7 +93,17 @@ async def put_attachment(sid, subject, name, content_type, content):
             RETURNING id''', (uuid4(), sid, name, content_type, len(content), digest, content))).fetchone()
         info = attachment_info(sid, inserted[0], name, content_type, len(content), digest)
         state = row[0]
-        state['uploaded_files'] = [f for f in state['uploaded_files'] if f['name'] != name] + [info]
+        if output_metadata is None:
+            if any(f['filename'] == name for f in state['output_files']):
+                raise ValueError('Filename belongs to a result attachment.')
+            state['uploaded_files'] = [f for f in state['uploaded_files'] if f['name'] != name] + [info]
+        else:
+            if any(f['name'] == name for f in state['uploaded_files']):
+                raise ValueError('Filename belongs to an uploaded attachment.')
+            info = dict(id=info['id'], filename=name, size=len(content), mimetype=content_type,
+                        hash=digest, object_name=info['object_name'], storage='postgres',
+                        code_data_id='', **output_metadata)
+            state['output_files'] = [f for f in state['output_files'] if f['filename'] != name] + [info]
         await conn.execute('UPDATE science_agent_sessions SET data=%s,updated_at=now() WHERE id=%s',
                            (Jsonb(state), sid))
     return info
@@ -122,4 +132,5 @@ async def delete_attachment(sid, subject, name):
         await conn.execute('DELETE FROM science_agent_attachments WHERE session_id=%s AND filename=%s', (sid, name))
         state = row[0]
         state['uploaded_files'] = [f for f in state['uploaded_files'] if f['name'] != name]
+        state['output_files'] = [f for f in state['output_files'] if f['filename'] != name]
         await conn.execute('UPDATE science_agent_sessions SET data=%s,updated_at=now() WHERE id=%s', (Jsonb(state), sid))
