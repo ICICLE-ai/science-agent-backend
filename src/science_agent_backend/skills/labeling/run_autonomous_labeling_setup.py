@@ -59,8 +59,9 @@ def validate_plan(plan):
         raise SetupError("plan", "The captured class-support flow requires DETECTION")
     if pipeline.get("slurmaccount") != FIXED_SLURM_ACCOUNT:
         raise SetupError("plan", f"Pipeline slurmaccount must be {FIXED_SLURM_ACCOUNT}")
-    if not str(pipeline.get("name", "")).startswith("DEMO: "):
-        raise SetupError("plan", "Demo pipeline name must start with DEMO:")
+    name = pipeline.get("name")
+    if not isinstance(name, str) or not name.strip() or len(name) > 120:
+        raise SetupError("plan", "Pipeline name must contain 1 to 120 characters")
 
     body = plan.get("class_support")
     expected_fields = {
@@ -100,11 +101,11 @@ def validate_plan(plan):
     }
     if any(body.get(key) != value for key, value in expected_paths.items()):
         raise SetupError("plan", "Class-support paths must share one dataset root")
-    dataset_root_text = str(dataset_root)
-    if dataset_root_text != "/demo" and not dataset_root_text.startswith(
-        "/users/hs950117/demo/"
-    ):
-        raise SetupError("plan", "Class-support dataset root is outside the allowed demo area")
+    parts = dataset_root.parts
+    if (len(parts) != 6 or parts[:2] != ("/", "users")
+            or parts[3] != "science-agent"
+            or any(part in {".", ".."} for part in parts[2:])):
+        raise SetupError("plan", "Class-support paths must use /users/USERNAME/science-agent/SESSION/DATASET")
 
 
 class CurlSmartLabeler:

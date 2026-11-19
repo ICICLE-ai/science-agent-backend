@@ -51,6 +51,13 @@ If the user asks about the previous job without giving its ID, use status withou
 The current labeling flow submits object detection for one image, not a generic
 segmentation or full classification workflow. Explain that distinction.
 Use actual observations; submission is not completed computation.
+For new labeling work, use tapis_base_dir from the private context. The backend
+sets it to /users/USERNAME/science-agent using the authenticated Tapis token's
+username. Each session/run keeps its own ground_truth, annotation/ann.json and
+output directories below that root. Never substitute a fixed account or /demo.
+Name new pipelines after the uploaded image/task, without a DEMO: prefix.
+Do not rename existing pipelines or move existing files during follow-ups; use
+their recorded paths when retrieving results.
 Both status and results automatically inspect output JSON when the observed job
 status is FINISHED or COMPLETED. The context supplies previous workflow reports,
 including the recorded system and output directory. Do not guess another user's

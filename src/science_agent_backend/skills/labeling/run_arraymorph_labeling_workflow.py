@@ -340,7 +340,7 @@ def submit_smart_labeler(
 ):
     source_name = Path(manifest["source_filename"]).stem
     pipeline_payload = {
-        "name": f"DEMO: {source_name} labeling"[:120],
+        "name": f"{source_name} labeling"[:120],
         "type": "DETECTION",
         "description": "Label an uploaded image stored and verified with ArrayMorph.",
         "slurmaccount": FIXED_SLURM_ACCOUNT,
@@ -541,10 +541,9 @@ def execute(args, write_marker=None):
     token = os.environ["TAPIS_TOKEN"]
     tapis_base_url = os.getenv("TAPIS_BASE_URL", "https://icicleai.tapis.io")
     tapis_system = os.getenv("SMART_LABELER_TAPIS_SYSTEM", "expanse-tapis-static")
-    tapis_base_dir = os.getenv(
-        "SMART_LABELER_TAPIS_BASE_DIR",
-        "/users/hs950117/demo",
-    )
+    tapis_base_dir = os.getenv("SMART_LABELER_TAPIS_BASE_DIR", "").strip()
+    if not tapis_base_dir:
+        raise SetupError("tapis-stage", "Provide the authenticated user's SMART_LABELER_TAPIS_BASE_DIR")
     emit_progress("tapis-stage", "running")
     staged = stage_recovered_image(
         manifest,

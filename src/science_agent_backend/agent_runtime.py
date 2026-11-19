@@ -108,7 +108,7 @@ async def run(sid, identity, message, send):
                     session_id=sid, run_id=run_id, user_request=message,
                     storage_namespace=hashlib.sha256(identity.subject.encode()).hexdigest(),
                     tapis_base_url=config.TAPIS_BASE_URL, tapis_system='expanse-tapis-static',
-                    tapis_base_dir=f'/users/{identity.username}/demo',
+                    tapis_base_dir=f'/users/{identity.username}/science-agent',
                     previous_workflows=[observation for entry in state['execution_log']
                         if entry.get('type') == 'pod_services' for observation in entry.get('observations', [])
                         if 'stages' in observation and 'run_id' in observation][-10:])).encode())
