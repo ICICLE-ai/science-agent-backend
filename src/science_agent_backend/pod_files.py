@@ -51,6 +51,33 @@ class PodFiles:
                 self.buffer = self.buffer[-262144:]
 
     async def command(self, value):
+        response = await self._exchange(value)
+        if response.get('_transfer') is not True:
+            return response
+        total, checksum = response['total'], response['sha256']
+        if not isinstance(total, int) or not 0 < total <= 16 * 1024 * 1024:
+            raise RuntimeError('Remote agent: invalid response transfer size.')
+        data = bytearray()
+        while True:
+            if (response.get('offset') != len(data) or response.get('total') != total
+                    or response.get('sha256') != checksum):
+                raise RuntimeError('Remote agent: response transfer changed during download.')
+            chunk = base64.b64decode(response['data'], validate=True)
+            if not chunk or len(data) + len(chunk) > total:
+                raise RuntimeError('Remote agent: invalid response transfer chunk.')
+            data.extend(chunk)
+            if len(data) == total:
+                break
+            response = await self._exchange({'op': 'response-part', 'offset': len(data), 'sha256': checksum})
+        if hashlib.sha256(data).hexdigest() != checksum:
+            raise RuntimeError('Remote agent: response checksum mismatch.')
+        result = json.loads(data)
+        result.pop('request_id', None)
+        if 'error' in result:
+            raise RuntimeError('Remote agent: file transfer failed (' + result['error'] + ').')
+        return result
+
+    async def _exchange(self, value):
         self.request_id += 1
         request = {**value, 'request_id': self.request_id}
         await self.ws.send_bytes(b'0' + json.dumps(request, separators=(',', ':')).encode() + b'\n')
@@ -90,7 +117,7 @@ async def file_channel(url, token=''):
     shell = 'python3 -u -c ' + shlex.quote(bootstrap)
     command = 'new-window -n ' + marker + ' ' + shlex.quote(shell)
     async with aiohttp.ClientSession(headers={'X-Tapis-Token': token} if token else {},
-                                     timeout=aiohttp.ClientTimeout(total=30)) as client:
+                                     timeout=aiohttp.ClientTimeout(total=None, connect=15, sock_connect=15)) as client:
         async with client.get(url.rstrip('/')+'/token', allow_redirects=False) as response:
             if response.status != 200:
                 raise RuntimeError(f'Remote agent: file authentication returned HTTP {response.status}.')

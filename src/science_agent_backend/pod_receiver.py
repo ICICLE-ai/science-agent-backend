@@ -117,11 +117,28 @@ def serve(marker):
     handle = None
     request_id = 0
     captured_answer, captured_markers = None, None
+    response_transfer = None
     signal.signal(signal.SIGHUP, lambda *_: sys.exit(0))
     def reply(data):
+        nonlocal response_transfer
         data['request_id'] = request_id
+        encoded = json.dumps(data, separators=(',', ':')).encode()
+        # Keep ACKs smaller than a terminal screen so tmux redraws cannot split
+        # a large JSON reply into an unrecoverable partial repaint.
+        if len(encoded) > 4096:
+            if len(encoded) > 16 * 1024 * 1024:
+                raise ValueError('Receiver response exceeds the 16 MiB transfer limit')
+            response_transfer = encoded
+            data = response_part(0)
+            data['request_id'] = request_id
         sys.stdout.write(marker + json.dumps(data, separators=(',', ':')) + '\r\n')
         sys.stdout.flush()
+    def response_part(offset):
+        if response_transfer is None or not isinstance(offset, int) or offset < 0 or offset >= len(response_transfer):
+            raise ValueError('Invalid response transfer offset')
+        return {'_transfer': True, 'offset': offset, 'total': len(response_transfer),
+                'sha256': hashlib.sha256(response_transfer).hexdigest(),
+                'data': base64.b64encode(response_transfer[offset:offset + 2048]).decode()}
     def target(value):
         relative = Path(value)
         if relative.is_absolute() or '..' in relative.parts:
@@ -141,7 +158,11 @@ def serve(marker):
                 request = json.loads(line)
                 request_id = request['request_id']
                 op = request['op']
-                if op == 'put':
+                if op == 'response-part':
+                    if response_transfer is None or request.get('sha256') != hashlib.sha256(response_transfer).hexdigest():
+                        raise ValueError('Response transfer changed')
+                    reply(response_part(request.get('offset')))
+                elif op == 'put':
                     if handle:
                         raise ValueError('Previous transfer unfinished')
                     path = target(request['path'])

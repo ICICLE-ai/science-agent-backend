@@ -66,10 +66,14 @@ class PodTerminal:
                     if progress:
                         await progress('Request sent to the remote agent; waiting for its response')
                     deadline = asyncio.get_running_loop().time() + timeout
+                    last_progress = monotonic()
                     candidate, candidate_since = None, 0
                     recovered = None
                     while asyncio.get_running_loop().time() < deadline:
                         await self._frame(ws, stream, 1)
+                        if progress and monotonic() - last_progress >= 15:
+                            await progress('Remote agent is still working; waiting for its completed reply')
+                            last_progress = monotonic()
                         idle = self._idle(screen)
                         if idle and self._has_end(screen, end):
                             reply_finished = True
@@ -89,13 +93,15 @@ class PodTerminal:
                             completed = True
                             return answer.replace(self.token, '[REDACTED]') if self.token else answer
                     raise RuntimeError('Remote agent: response timed out. Check the remote terminal before retrying; a remote operation may still be running.')
-                finally:
+                except asyncio.CancelledError:
                     if submitted and not completed and not reply_finished and not ws.closed:
-                        # Disconnect alone leaves the persistent tmux agent running.
+                        # Only an explicit cancellation may interrupt the agent;
+                        # a transport timeout does not mean its work has stopped.
                         try:
                             await ws.send_bytes(b'0\x03')
                         except (aiohttp.ClientError, ConnectionError):
                             pass
+                    raise
 
     @staticmethod
     def _shell_prompt(screen):

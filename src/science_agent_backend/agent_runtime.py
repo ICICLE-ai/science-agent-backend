@@ -5,6 +5,7 @@ import json
 import tempfile
 import time
 import hashlib
+import logging
 from pathlib import Path
 from uuid import uuid4
 from . import config, database
@@ -70,6 +71,7 @@ async def run(sid, identity, message, send):
         written = False
         recorded_observations = None
         cleanup_warning_sent = False
+        answer_saved = False
 
         async def finish_pod_run():
             nonlocal written, recorded_observations, cleanup_warning_sent
@@ -165,20 +167,30 @@ async def run(sid, identity, message, send):
                     continue
                 answer = answer.replace(secret, '[REDACTED]')
             item = dict(id=str(uuid4()), role='assistant', tag='answer', content=answer)
-            records = recorded_observations if recorded_observations is not None else (
-                await finish_pod_run() if written else [])
-            if any(record.get('result_analysis', {}).get('files') for record in records):
-                from .result_files import save_result_files
-                downloads, download_errors = await save_result_files(sid, identity.subject, identity.token, records, item['id'])
-                if download_errors:
-                    item['content'] += '\n\nSome result JSON downloads could not be saved. The analysis above does not confirm their availability for download.'
-                if downloads:
-                    current = await database.get(sid, identity.subject)
-                    await send(dict(type='output_files', files=current['output_files']))
             await database.mutate(sid, identity.subject, lambda d: d['history'].append(item))
+            answer_saved = True
             await send(dict(type='response_start', id=item['id'], role='assistant', tag='answer'))
             await send(dict(type='response_chunk', id=item['id'], text=item['content']))
             await send(dict(type='response_end', id=item['id']))
+            try:
+                records = recorded_observations if recorded_observations is not None else (
+                    await finish_pod_run() if written else [])
+            except Exception:
+                records = []
+                completion_detail = 'Agent reply saved; workflow records could not be retrieved. Do not repeat submitted jobs.'
+                logging.getLogger(__name__).warning('Workflow observation collection failed after reply for run %s', run_id)
+            if any(record.get('result_analysis', {}).get('files') for record in records):
+                from .result_files import save_result_files
+                try:
+                    downloads, download_errors = await save_result_files(sid, identity.subject, identity.token, records, item['id'])
+                except Exception:
+                    downloads, download_errors = [], ['Result download storage unavailable']
+                    logging.getLogger(__name__).warning('Result download persistence failed after reply for run %s', run_id)
+                if download_errors:
+                    completion_detail = 'Agent reply saved; some result JSON downloads could not be saved.'
+                if downloads:
+                    current = await database.get(sid, identity.subject)
+                    await send(dict(type='output_files', files=current['output_files']))
             await send(dict(type='workflow_progress', run_id=run_id, step_id='agent', label='Remote Science Agent',
                             status='completed', timestamp=time.time(), detail=completion_detail))
         except (Exception, asyncio.CancelledError):
@@ -189,7 +201,14 @@ async def run(sid, identity, message, send):
         finally:
             if written:
                 try:
-                    await finish_pod_run()
+                    if answer_saved and recorded_observations is None:
+                        async with file_channel(config.POD_URL, identity.token) as channel:
+                            await channel.command({'op': 'remove', 'path': private})
+                    else:
+                        await finish_pod_run()
                 except Exception:
-                    await progress('Private context cleanup could not be confirmed.')
+                    if answer_saved:
+                        logging.getLogger(__name__).warning('Private context cleanup unconfirmed after reply for run %s', run_id)
+                    else:
+                        await progress('Private context cleanup could not be confirmed.')
             fcntl.flock(lock, fcntl.LOCK_UN)
