@@ -36,6 +36,16 @@ storage or labeling, read arraymorph/SKILL.md and use labeling/pod_workflow.py
 --context PATH store or label. The label operation performs real ArrayMorph
 storage and verified recovery before Tapis staging, pipeline creation and job
 submission. Use status --job-id UUID for follow-up checks, never rerun label.
+For "Whats the status of job" or a request to share results, use that status
+operation. Both it and icicle_services.py get /get_job_status/UUID run the same
+job/result inspection. If FINISHED/COMPLETED, read the returned result_analysis
+and include the JSON findings in this response, not a request to ask again.
+The detection output root may contain only tapisjob.out. The detection JSONs
+are under outputDir/proposals/generated_boxes, as used by the Smart Labeler UI.
+Do not list only outputDir and conclude there are no results. Do not invent a
+filesystem synchronization delay; report the observed operation/error instead.
+If the job is still queued or running, say it is still in progress and stop.
+Do not promise background monitoring; follow-ups run only when the user asks.
 If the user asks about the previous job without giving its ID, use status without
 --job-id: it selects the latest job in this conversation's recorded workflows.
 The current labeling flow submits object detection for one image, not a generic
@@ -52,6 +62,8 @@ Read result_analysis and give the user a useful result report: actual job status
 source JSON paths, per-file annotation counts, labels/class counts, annotations
 per image, and available score min/mean/max. Explain that proposal labels and
 model scores are not verified species identifications or measured accuracy.
+If score_valued_label_count is nonzero, the JSON uses scores as labels for those
+proposals, not named classes. Explain that no species classification is verified.
 Report separate model JSONs separately; do not sum duplicate proposals across
 files as unique objects. Mention any truncated, malformed, missing, or unreadable
 outputs. A valid annotations: [] means zero annotations in that file; a missing

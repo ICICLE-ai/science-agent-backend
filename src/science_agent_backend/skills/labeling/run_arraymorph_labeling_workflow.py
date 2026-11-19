@@ -14,14 +14,14 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
-from run_autonomous_labeling_setup import (
-    BIOCLIP_ID,
-    FIXED_SLURM_ACCOUNT,
-    OWLV2_ID,
-    CurlSmartLabeler,
-    SetupError,
-    run_setup,
-)
+if __package__:
+    from .run_autonomous_labeling_setup import (
+        BIOCLIP_ID, FIXED_SLURM_ACCOUNT, OWLV2_ID, CurlSmartLabeler, SetupError, run_setup,
+    )
+else:
+    from run_autonomous_labeling_setup import (
+        BIOCLIP_ID, FIXED_SLURM_ACCOUNT, OWLV2_ID, CurlSmartLabeler, SetupError, run_setup,
+    )
 
 
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp"}

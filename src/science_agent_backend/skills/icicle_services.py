@@ -51,6 +51,12 @@ def execute(context_path, operation, endpoint=None):
     else:
         if not re.fullmatch(r'/(pipes|patra/list|pipe/[0-9]+|get_job_status/[A-Za-z0-9_-]+)', endpoint or ''):
             raise ValueError('This remote adapter only permits documented read-only operations.')
+        if endpoint.startswith('/get_job_status/'):
+            if __package__:
+                from .labeling.pod_workflow import execute as job_workflow
+            else:
+                from labeling.pod_workflow import execute as job_workflow
+            return job_workflow(context_path, 'status', job_id=endpoint.rsplit('/', 1)[1])
         base = context.get('smart_labeler_url', '')
         if urlsplit(base).scheme != 'https':
             raise ValueError('An HTTPS Smart Labeler URL is required.')

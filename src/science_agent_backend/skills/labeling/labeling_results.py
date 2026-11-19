@@ -13,6 +13,7 @@ def summarize_annotations(document):
                   if isinstance(item, dict) and 'id' in item}
     labels, images, scores = Counter(), Counter(), []
     missing_scores = 0
+    score_valued_labels = 0
     for item in annotations:
         if not isinstance(item, dict) or not any(key in item for key in ('bounding_box', 'bbox', 'segmentation')):
             raise ValueError('Unsupported annotation entry: no box or segmentation.')
@@ -21,6 +22,11 @@ def summarize_annotations(document):
         image = item.get('image_path', item.get('image_id', '(unspecified)'))
         images[str(image)] += 1
         score = item.get('score')
+        try:
+            if label is not None and score is not None and math.isclose(float(label), float(score)):
+                score_valued_labels += 1
+        except (TypeError, ValueError):
+            pass
         if isinstance(score, (int, float)) and not isinstance(score, bool) and math.isfinite(score):
             scores.append(score)
         else:
@@ -29,6 +35,7 @@ def summarize_annotations(document):
         'annotation_count': len(annotations), 'class_counts': dict(labels),
         'annotations_per_image': dict(images), 'scored_annotation_count': len(scores),
         'missing_score_count': missing_scores,
+        'score_valued_label_count': score_valued_labels,
         'scores': {'min': min(scores), 'mean': sum(scores) / len(scores), 'max': max(scores)} if scores else None,
         'limitations': 'Model scores are not measured accuracy. Proposals are not verified species classifications. Human review is still required.',
     }

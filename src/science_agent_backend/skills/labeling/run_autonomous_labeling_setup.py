@@ -9,10 +9,10 @@ import sys
 from pathlib import Path
 from urllib.parse import urlencode
 
-from validate_class_support_preflight import (
-    validate as validate_preflight,
-    validate_resources,
-)
+if __package__:
+    from .validate_class_support_preflight import validate as validate_preflight, validate_resources
+else:
+    from validate_class_support_preflight import validate as validate_preflight, validate_resources
 
 
 BIOCLIP_ID = "8c517ed0-c9c0-4f57-bb9d-f066ab4ec34e"

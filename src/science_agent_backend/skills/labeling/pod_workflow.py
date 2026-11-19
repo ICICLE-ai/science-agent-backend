@@ -12,8 +12,12 @@ from urllib.parse import urlencode
 from urllib.request import Request, build_opener, HTTPRedirectHandler
 from uuid import uuid4
 
-from run_arraymorph_labeling_workflow import stage_recovered_image, submit_smart_labeler
-from labeling_results import inspect_results
+if __package__:
+    from .run_arraymorph_labeling_workflow import stage_recovered_image, submit_smart_labeler
+    from .labeling_results import inspect_results
+else:
+    from run_arraymorph_labeling_workflow import stage_recovered_image, submit_smart_labeler
+    from labeling_results import inspect_results
 
 
 class NoRedirect(HTTPRedirectHandler):

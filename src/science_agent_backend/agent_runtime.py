@@ -68,16 +68,27 @@ async def run(sid, identity, message, send):
         prefix = f'sessions/{sid}/runs/{run_id}'
         private = prefix + '/context.json'
         written = False
+        recorded_observations = None
+        cleanup_warning_sent = False
 
         async def finish_pod_run():
-            nonlocal written
-            async with file_channel(config.POD_URL, identity.token) as channel:
-                await channel.command({'op': 'remove', 'path': private})
-                records = await channel.command({'op': 'observations', 'path': prefix + '/observations'})
-            await database.mutate(sid, identity.subject, lambda d: d['execution_log'].append(
-                {'type':'pod_services', 'run_id':run_id, **records}))
-            written = False
-            return records['observations']
+            nonlocal written, recorded_observations, cleanup_warning_sent
+            try:
+                async with file_channel(config.POD_URL, identity.token) as channel:
+                    if recorded_observations is None:
+                        records = await channel.command({'op': 'observations', 'path': prefix + '/observations'})
+                        await database.mutate(sid, identity.subject, lambda d: d['execution_log'].append(
+                            {'type':'pod_services', 'run_id':run_id, **records}))
+                        recorded_observations = records['observations']
+                    await channel.command({'op': 'remove', 'path': private})
+                    written = False
+            except Exception:
+                if recorded_observations is None:
+                    raise
+                if not cleanup_warning_sent:
+                    await progress('Workflow records saved; private context cleanup could not be confirmed.')
+                    cleanup_warning_sent = True
+            return recorded_observations
 
         try:
             state = await database.get(sid, identity.subject)
@@ -132,6 +143,8 @@ async def run(sid, identity, message, send):
                 'When a job is complete, status automatically reads its result JSON and returns result_analysis. '
                 'Explain the per-file counts, labels, score statistics and limitations from result_analysis, '
                 'not just that the job finished. Missing or unreadable output is not zero detections. '
+                'Report only the currently observed status/results; do not promise unsolicited future updates '
+                'or say that you will continue monitoring in the background. '
                 'Report completed stages, pipeline/job identifiers, and exact job status. Submitted is not completed. '
                 'Do not claim classification or segmentation results until the job has finished and outputs are verified. '
                 f'Uploaded files: {json.dumps(files)}')
@@ -152,7 +165,8 @@ async def run(sid, identity, message, send):
                     continue
                 answer = answer.replace(secret, '[REDACTED]')
             item = dict(id=str(uuid4()), role='assistant', tag='answer', content=answer)
-            records = await finish_pod_run() if written else []
+            records = recorded_observations if recorded_observations is not None else (
+                await finish_pod_run() if written else [])
             if any(record.get('result_analysis', {}).get('files') for record in records):
                 from .result_files import save_result_files
                 downloads, download_errors = await save_result_files(sid, identity.subject, identity.token, records, item['id'])
