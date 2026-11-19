@@ -1,6 +1,6 @@
 [project]
 name = "science-agent-backend"
-version = "2.2.1"
+version = "0.1.0"
 requires-python = ">=3.12,<3.14"
 dependencies = [
     "fastapi>=0.143.0",
